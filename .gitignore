@@ -1,0 +1,16 @@
+# OS / editor cruft
+.DS_Store
+Thumbs.db
+*~
+*.swp
+
+# Future firmware build output (Phase 0.5+)
+build/
+.pio/
+*.bin
+*.elf
+
+# If this repo is ever shared/pushed (see PLAN.md data-hygiene note):
+# move the car MAC into secrets.h and uncomment, and purge media/ from history
+# secrets.h
+# media/
