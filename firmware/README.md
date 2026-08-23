@@ -37,7 +37,8 @@ pio device monitor             # serial log at 115200
 
 After the first USB flash, reflash over the air without touching the device
 (this is how the logger box becomes the v1 box without leaving its mounting
-spot):
+spot). OTA only comes up with a real `OTA_PASSWORD` in config.h — blank or
+the placeholder keeps it disabled:
 
 ```bash
 pio run -e v1 -t upload --upload-port bluedoor.local
@@ -115,7 +116,7 @@ BT sighting ─▶ state machine ─▶ strict verdict ─▶ run-mode gate ─�
 | `PULSE` | v1: actual/suppressed/refused/manual pulses, and pulse completion. |
 | `MODE` | v1: run-mode changes (web) and the mode restored at boot. |
 | `RELAXED` | The no-ramp fallback rule would have fired here (comparison data). |
-| `REFUSE` | Wake-in-place signature (strong+flat after absence) — correctly not fired. |
+| `REFUSE` | Wake-in-place signature (strong+flat after absence) — the whole encounter is latched non-fireable. |
 | `ENC` | Encounter (sighting cluster while armed) started/ended, with RSSI stats. |
 | `SIGHT` | Car sightings; aggregated per minute while disarmed. |
 | `PROBE` | Targeted page to the car — presence without RSSI, never fires anything. |

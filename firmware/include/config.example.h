@@ -9,7 +9,8 @@
 // The car head unit's classic BT MAC ("Uconnect"), from Phase 0.
 #define CAR_BT_MAC      "AA:BB:CC:DD:EE:FF"
 
-// Password for over-the-air reflashing (pio run -t upload --upload-port bluedoor.local)
+// Password for over-the-air reflashing (pio run -t upload --upload-port bluedoor.local).
+// Blank or left as this placeholder = OTA stays disabled (USB reflash only).
 #define OTA_PASSWORD    "change-me"
 
 // v1 only: token required by the web controls (mode switch, manual pulse).

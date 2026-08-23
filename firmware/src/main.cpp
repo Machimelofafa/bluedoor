@@ -18,7 +18,8 @@
 //   RELAXED would-open           — the no-ramp fallback rule, logged in
 //                                  parallel so the week's data can compare them
 //   REFUSE wake-in-place         — strong+flat encounter after absence (car
-//                                  door opened while parked): must NOT fire
+//                                  door opened while parked): latches the whole
+//                                  encounter non-fireable
 // Pass criteria for the week: every real arrival -> strict WOULD-OPEN,
 // zero strict WOULD-OPENs from anything else.
 
@@ -93,6 +94,12 @@ static String fmtDur(uint32_t ms) {
   return String(b);
 }
 
+// blank or placeholder OTA password = OTA never comes up (known credential
+// would allow firmware replacement over the LAN)
+static bool otaPasswordUsable() {
+  return OTA_PASSWORD[0] != '\0' && strcmp(OTA_PASSWORD, "change-me") != 0;
+}
+
 static void logEvent(const char *tag, const String &msg) {
   char line[224];
   snprintf(line, sizeof(line), "%s [B%03u] %-7s %s", tsNow().c_str(),
@@ -138,6 +145,7 @@ static bool carMacIsPlaceholder = false;
 // diagnostics updated from the BT callback task
 static std::atomic<uint32_t> otherDevReports{0};
 static std::atomic<int> otherBestRssi{-127};
+static std::atomic<uint32_t> carNoRssiReports{0};
 
 enum class ScanMode : uint8_t { Idle, Inquiry, Probe };
 static ScanMode scanMode = ScanMode::Idle;
@@ -156,12 +164,14 @@ static bool parseMac(const char *s, esp_bd_addr_t out) {
 static void gapCallback(esp_bt_gap_cb_event_t event, esp_bt_gap_cb_param_t *param) {
   switch (event) {
     case ESP_BT_GAP_DISC_RES_EVT: {
+      bool hasRssi = false;
       int8_t rssi = 127;
       char name[33] = {0};
       for (int i = 0; i < param->disc_res.num_prop; i++) {
         esp_bt_gap_dev_prop_t *p = &param->disc_res.prop[i];
         if (p->type == ESP_BT_GAP_DEV_PROP_RSSI) {
           rssi = *(int8_t *)p->val;
+          hasRssi = true;
         } else if (p->type == ESP_BT_GAP_DEV_PROP_BDNAME) {
           size_t n = p->len < 32 ? p->len : 32;
           memcpy(name, p->val, n);
@@ -179,13 +189,19 @@ static void gapCallback(esp_bt_gap_cb_event_t event, esp_bt_gap_cb_param_t *para
         }
       }
       if (memcmp(param->disc_res.bda, carAddr, 6) == 0) {
+        // GAP delivers name-discovery results here too, without an RSSI prop;
+        // those must not enter the RSSI pipeline as the +127 init value
+        if (!hasRssi) {
+          carNoRssiReports++;
+          break;
+        }
         BtEv ev{BtEvKind::Sighting, rssi, true, {0}};
         strlcpy(ev.name, name, sizeof(ev.name));
         xQueueSend(btQueue, &ev, 0);
       } else {
         // neighbors' devices: counted for diagnostics, never identified/logged
         otherDevReports++;
-        if (rssi != 127 && rssi > otherBestRssi) otherBestRssi = rssi;
+        if (hasRssi && rssi > otherBestRssi) otherBestRssi = rssi;
       }
       break;
     }
@@ -423,22 +439,25 @@ static void onCarSighting(int8_t rssi, const char *name) {
       }
     }
 
-    // strict rule: the real verdict
-    if (enc.count >= APPROACH_MIN_SIGHTINGS && enc.lastRssi >= RSSI_TRIGGER_DBM &&
-        (enc.maxRssi - enc.firstRssi) >= APPROACH_MIN_RISE_DB &&
-        enc.lastRssi > enc.firstRssi) {
-      fireWouldOpen();
-      return;
-    }
-
-    // wake-in-place: strong from the first sighting, flat ever since
+    // wake-in-place: strong from the first sighting, flat ever since. Latches
+    // the whole encounter non-fireable — RSSI drift later in a parked-car wake
+    // must never become a verdict
     if (!enc.wakeFlagged && enc.count >= 3 && enc.firstRssi >= WAKE_STRONG_DBM &&
         (enc.maxRssi - enc.minRssi) <= WAKE_FLAT_DB) {
       enc.wakeFlagged = true;
       refusalCount++;
       prefs.putUInt("refused", refusalCount);
-      logEvent("REFUSE", "wake-in-place signature (strong+flat), NOT a would-open: " +
-                             encSummary());
+      logEvent("REFUSE", "wake-in-place signature (strong+flat), encounter latched "
+                         "non-fireable: " + encSummary());
+    }
+
+    // strict rule: the real verdict (never from a wake-latched encounter)
+    if (!enc.wakeFlagged &&
+        enc.count >= APPROACH_MIN_SIGHTINGS && enc.lastRssi >= RSSI_TRIGGER_DBM &&
+        (enc.maxRssi - enc.firstRssi) >= APPROACH_MIN_RISE_DB &&
+        enc.lastRssi > enc.firstRssi) {
+      fireWouldOpen();
+      return;
     }
   } else {
     // disarmed: aggregate to keep the log compact
@@ -604,6 +623,9 @@ static void handleRoot() {
   if (carMacIsPlaceholder)
     h += F("<p class=fired>⚠ config.h still has the placeholder car MAC — "
            "this build can never see the car!</p>");
+  if (!otaPasswordUsable())
+    h += F("<p class=fired>⚠ OTA_PASSWORD is blank or the placeholder — OTA is "
+           "disabled until config.h gets a real one (USB reflash only).</p>");
 
   h += F("<table>");
   h += "<tr><td>would-open (strict)</td><td class=fired>" + String(firedCount) + "</td></tr>";
@@ -630,7 +652,10 @@ static void handleRoot() {
     if (lastSightName[0]) h += String(" ('") + lastSightName + "')";
   }
   h += "</td></tr>";
-  h += "<tr><td>sightings (this boot)</td><td>" + String(totalSightings) + "</td></tr>";
+  h += "<tr><td>sightings (this boot)</td><td>" + String(totalSightings);
+  if (uint32_t noR = carNoRssiReports.load())
+    h += " (+" + String((unsigned)noR) + " car reports w/o RSSI, ignored)";
+  h += "</td></tr>";
   h += "<tr><td>page probe</td><td>";
   if (!probeEverRan) h += "not run yet";
   else h += String(lastProbeOk ? "answering" : "no answer") +
@@ -771,9 +796,9 @@ static bool wifiWasConnected = false, otaReady = false, mdnsReady = false;
 static uint32_t lastWifiKickMs = 0;
 
 static void setupOtaOnce() {
-  if (otaReady) return;
+  if (otaReady || !otaPasswordUsable()) return;
   ArduinoOTA.setHostname(DEVICE_HOSTNAME);
-  if (strlen(OTA_PASSWORD)) ArduinoOTA.setPassword(OTA_PASSWORD);
+  ArduinoOTA.setPassword(OTA_PASSWORD);
   ArduinoOTA.onStart([]() {
     otaActive = true;
     esp_bt_gap_cancel_discovery();
@@ -882,6 +907,9 @@ void setup() {
   }
   if (strcmp(WIFI_SSID, "your-wifi-ssid") == 0)
     logEvent("ERR", "config.h has placeholder WiFi credentials — web page will not come up");
+  if (!otaPasswordUsable())
+    logEvent("ERR", "OTA_PASSWORD blank or placeholder in config.h — OTA stays disabled, "
+                    "reflash over USB only");
 
   btQueue = xQueueCreate(32, sizeof(BtEv));
   stateSinceMs = lastEvidenceMs = lastInqDoneMs = lastProbeMs = millis();
