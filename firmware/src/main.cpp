@@ -279,10 +279,18 @@ static struct {
 // sits awake in the garage)
 static struct {
   bool active = false;
-  uint32_t startMs = 0;
+  uint32_t startMs = 0, lastMs = 0;
   uint16_t count = 0;
-  int8_t minRssi = 0, maxRssi = 0;
+  int8_t firstRssi = 0, lastRssi = 0, minRssi = 0, maxRssi = 0;
 } agg;
+
+// RSSI trajectory label: separates a drive-away (receding) from a
+// parked-awake session (steady) and an approach at a glance in the log
+static const char *trendWord(int8_t first, int8_t last) {
+  if ((int)last - (int)first >= TREND_MIN_DB) return "approaching";
+  if ((int)first - (int)last >= TREND_MIN_DB) return "receding";
+  return "steady";
+}
 
 static const char *stateName(SysState s) {
   switch (s) {
@@ -304,15 +312,18 @@ static void setState(SysState s, const String &why) {
 static void flushAgg(const char *why) {
   if (!agg.active) return;
   logEvent("SIGHT", "car visible (" + String(why) + "): " + String(agg.count) +
-                        " sightings in " + fmtDur(millis() - agg.startMs) +
-                        ", rssi " + String(agg.minRssi) + ".." + String(agg.maxRssi));
+                        " sightings in " + fmtDur(agg.lastMs - agg.startMs) +
+                        ", rssi " + String(agg.firstRssi) + "->" + String(agg.lastRssi) +
+                        " (min " + String(agg.minRssi) + " max " + String(agg.maxRssi) +
+                        ") " + trendWord(agg.firstRssi, agg.lastRssi));
   agg.active = false;
 }
 
 static String encSummary() {
   return String("n=") + enc.count + " dur=" + fmtDur(enc.lastMs - enc.startMs) +
          " rssi first=" + enc.firstRssi + " min=" + enc.minRssi +
-         " max=" + enc.maxRssi + " last=" + enc.lastRssi;
+         " max=" + enc.maxRssi + " last=" + enc.lastRssi +
+         " trend=" + trendWord(enc.firstRssi, enc.lastRssi);
 }
 
 static void endEncounter(const String &why) {
@@ -468,8 +479,10 @@ static void onCarSighting(int8_t rssi, const char *name) {
       agg.active = true;
       agg.startMs = now;
       agg.count = 0;
-      agg.minRssi = agg.maxRssi = rssi;
+      agg.firstRssi = agg.minRssi = agg.maxRssi = rssi;
     }
+    agg.lastMs = now;
+    agg.lastRssi = rssi;
     agg.count++;
     if (rssi < agg.minRssi) agg.minRssi = rssi;
     if (rssi > agg.maxRssi) agg.maxRssi = rssi;
@@ -515,6 +528,10 @@ static void machineTick() {
       setState(SysState::DisarmedSeen, "encounter without verdict");
     }
   }
+
+  // flush early when sightings stop, so departures / head-unit sleep get a
+  // timestamp instead of dissolving into the next period flush
+  if (agg.active && now - agg.lastMs > SIGHT_AGG_QUIET_MS) flushAgg("went quiet");
 
   if (sysState != SysState::Armed && now - lastEvidenceMs >= AWAY_MIN_MS) {
     flushAgg("state change");

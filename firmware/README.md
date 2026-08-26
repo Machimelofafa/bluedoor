@@ -117,8 +117,8 @@ BT sighting ─▶ state machine ─▶ strict verdict ─▶ run-mode gate ─�
 | `MODE` | v1: run-mode changes (web) and the mode restored at boot. |
 | `RELAXED` | The no-ramp fallback rule would have fired here (comparison data). |
 | `REFUSE` | Wake-in-place signature (strong+flat after absence) — the whole encounter is latched non-fireable. |
-| `ENC` | Encounter (sighting cluster while armed) started/ended, with RSSI stats. |
-| `SIGHT` | Car sightings; aggregated per minute while disarmed. |
+| `ENC` | Encounter (sighting cluster while armed) started/ended, with RSSI stats and a `trend=` label (approaching / receding / steady). |
+| `SIGHT` | Car sightings; aggregated per minute while disarmed, each line with first→last RSSI and a trend label — `receding` = drove away, `steady` = parked awake (e.g. someone opened the car), `approaching` = drove up. A `went quiet` flush timestamps the moment sightings stopped. |
 | `PROBE` | Targeted page to the car — presence without RSSI, never fires anything. |
 | `STATE` | DISARMED(boot/seen/lockout) ↔ ARMED transitions with reasons. |
 | `HB` | 30-min heartbeat (liveness); gap = crash/power loss. |

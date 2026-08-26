@@ -51,6 +51,13 @@
 #define PIN_REED               27
 
 // ---- logging ----
+// Trajectory label on sighting-aggregate and encounter summaries:
+// |last - first| >= this many dB logs as approaching/receding, else steady
+// (steady + strong = parked car woken in place, e.g. door opened)
+#define TREND_MIN_DB           6
+// Disarmed sighting aggregate flushes early once sightings stop for this
+// long, timestamping the moment the car went quiet (drove off / fell asleep)
+#define SIGHT_AGG_QUIET_MS     (45u * 1000u)
 #define HEARTBEAT_MS           (30u * 60u * 1000u)
 #define LOG_ROTATE_BYTES       (80u * 1024u)   // 2 files x 80 KB in ~190 KB FS
 #define SIGHT_AGG_WINDOW_MS    (60u * 1000u)   // aggregate disarmed sightings
