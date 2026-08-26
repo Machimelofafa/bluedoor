@@ -68,6 +68,25 @@ static WebServer server(80);
 static uint32_t bootCount = 0;
 static bool timeSynced = false;
 
+// Panic forensics (2 panics on day 1, no USB attached for a backtrace):
+// RTC noinit RAM survives crash resets, so the next boot can log where the
+// main loop last checkpointed and the lifetime-min free heap. A crash in
+// another task still shows loop's last crumb, but paired with min-heap it
+// separates OOM-abort from a stack/driver fault.
+RTC_NOINIT_ATTR static uint32_t bcMagic;
+RTC_NOINIT_ATTR static uint32_t bcStep;
+RTC_NOINIT_ATTR static uint32_t bcUptimeS;
+RTC_NOINIT_ATTR static uint32_t bcMinHeap;
+#define BC_MAGIC 0xB1DE0011u
+static const char *BC_NAMES[] = {"boot", "bt-queue", "machine-tick", "scan-tick",
+                                 "wifi-tick", "web-client", "ota", "heartbeat"};
+static inline void crumb(uint32_t step) {
+  bcStep = step;
+  bcUptimeS = millis() / 1000;
+  uint32_t mh = ESP.getMinFreeHeap();
+  if (mh < bcMinHeap) bcMinHeap = mh;
+}
+
 static char ring[RING_LINES][RING_LINE_LEN];
 static int ringHead = 0, ringCount = 0;
 
@@ -915,6 +934,15 @@ void setup() {
   logEvent("BOOT", String("bluedoor ") + FW_VERSION + " (" + FW_ROLE + ") built " + __DATE__ +
                        " " + __TIME__ + ", reset: " + resetReasonStr() + ", boot #" +
                        String(bootCount));
+  if (esp_reset_reason() == ESP_RST_PANIC && bcMagic == BC_MAGIC)
+    logEvent("ERR", "panic forensics: last loop checkpoint '" +
+                        String(bcStep < 8 ? BC_NAMES[bcStep] : "?") + "' at uptime " +
+                        String(bcUptimeS) + "s, min free heap " +
+                        String(bcMinHeap / 1024) + "K");
+  bcMagic = BC_MAGIC;
+  bcStep = 0;
+  bcUptimeS = 0;
+  bcMinHeap = UINT32_MAX;
 #if PULSE_ENABLED
   logEvent("MODE", String("run mode: ") + modeName(runMode) +
                        " (persisted; first-ever boot defaults to DRY-RUN)");
@@ -969,6 +997,7 @@ void setup() {
 
 void loop() {
   BtEv ev;
+  crumb(1);
   while (xQueueReceive(btQueue, &ev, 0) == pdTRUE) {
     switch (ev.kind) {
       case BtEvKind::Sighting:
@@ -992,23 +1021,30 @@ void loop() {
 #endif
   if (now - lastTickMs >= 500) {
     lastTickMs = now;
+    crumb(2);
     machineTick();
+    crumb(3);
     scanTick();
+    crumb(4);
     wifiTick();
     if (agg.active && now - agg.startMs >= SIGHT_AGG_WINDOW_MS) flushAgg("period");
   }
 
   if (now - lastHeartbeatMs >= HEARTBEAT_MS) {
     lastHeartbeatMs = now;
+    crumb(7);
     uint32_t other = otherDevReports.exchange(0);
     logEvent("HB", String(stateName(sysState)) + " sightings=" + String(hbSightings) +
                        " cycles=" + String(hbCycles) + " otherdevs=" + String(other) +
-                       " heap=" + String(ESP.getFreeHeap() / 1024) + "K wifi=" +
+                       " heap=" + String(ESP.getFreeHeap() / 1024) + "K min=" +
+                       String(ESP.getMinFreeHeap() / 1024) + "K wifi=" +
                        String(WiFi.status() == WL_CONNECTED ? WiFi.RSSI() : 0));
     hbSightings = hbCycles = 0;
   }
 
+  crumb(5);
   server.handleClient();
+  crumb(6);
   if (otaReady) ArduinoOTA.handle();
   delay(10);
 }
