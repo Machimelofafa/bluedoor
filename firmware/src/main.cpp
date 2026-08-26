@@ -602,7 +602,6 @@ static void handleRoot() {
   String h;
   h.reserve(9000);
   h += F("<!doctype html><html><head><meta charset=utf-8>"
-         "<meta http-equiv=refresh content=10>"
          "<meta name=viewport content='width=device-width,initial-scale=1'>"
          "<title>bluedoor 0.5</title><style>"
          "body{font-family:system-ui,sans-serif;margin:1em;background:#111;color:#ddd;max-width:60em}"
@@ -714,7 +713,11 @@ static void handleRoot() {
     h += htmlEscape(ring[idx]);
     h += '\n';
   }
-  h += F("</pre></body></html>");
+  // auto-refresh, but never while someone is typing in a form field
+  h += F("</pre><script>var ff=document.querySelectorAll('input');"
+         "setInterval(function(){for(var k=0;k<ff.length;k++){var e=ff[k];"
+         "if(document.activeElement===e||e.value)return;}location.reload();},10000);"
+         "</script></body></html>");
   server.send(200, "text/html", h);
 }
 
@@ -889,6 +892,11 @@ void setup() {
 #endif
   Serial.begin(115200);
   delay(100);
+
+  // TZ from the first timestamp: system time survives soft resets (panic,
+  // OTA), and without this those boots stamp UTC until WiFi re-syncs
+  setenv("TZ", TZ_INFO, 1);
+  tzset();
 
   prefs.begin("bluedoor", false);
   bootCount = prefs.getUInt("boot", 0) + 1;

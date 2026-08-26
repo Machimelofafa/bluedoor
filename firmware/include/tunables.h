@@ -62,4 +62,4 @@
 #define LOG_ROTATE_BYTES       (80u * 1024u)   // 2 files x 80 KB in ~190 KB FS
 #define SIGHT_AGG_WINDOW_MS    (60u * 1000u)   // aggregate disarmed sightings
 #define RING_LINES             120             // in-RAM tail for the web page
-#define RING_LINE_LEN          140
+#define RING_LINE_LEN          168             // fits a full ENC summary line
