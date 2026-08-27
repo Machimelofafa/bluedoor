@@ -121,7 +121,8 @@ BT sighting ─▶ state machine ─▶ strict verdict ─▶ run-mode gate ─�
 | `SIGHT` | Car sightings; aggregated per minute while disarmed, each line with first→last RSSI and a trend label — `receding` = drove away, `steady` = parked awake (e.g. someone opened the car), `approaching` = drove up. A `went quiet` flush timestamps the moment sightings stopped. |
 | `PROBE` | Targeted page to the car — presence without RSSI, never fires anything. |
 | `STATE` | DISARMED(boot/seen/lockout) ↔ ARMED transitions with reasons. |
-| `HB` | 30-min heartbeat (liveness); gap = crash/power loss. |
+| `HB` | 30-min heartbeat (liveness); gap = crash/power loss. Includes `big=` (largest free block) — allocation failures are about fragmentation, which free heap alone hides. |
+| `RADIO` | 5-min census of what the inquiry radio actually heard: completed cycles, every device report (car and anonymous neighbours), and the best RSSI of anything. Reads a quiet log as "heard nothing" rather than "was not listening". Also marks the WiFi/BT coexistence test windows (`WIFI_DUTY_TEST` in tunables.h): WiFi alternates 10 min up / 20 min quiet, so the two can be compared inside one run. Every boot starts with WiFi up, so OTA is always reachable within 10 min of a reset. |
 | `MARK` | Your ground-truth annotations. |
 | `ERR` | Init problems, watchdog restarts, refused control attempts (with source IP). |
 

@@ -66,3 +66,18 @@
 #define SIGHT_AGG_WINDOW_MS    (60u * 1000u)   // aggregate disarmed sightings
 #define RING_LINES             120             // in-RAM tail for the web page
 #define RING_LINE_LEN          168             // fits a full ENC summary line
+
+// ---- radio diagnostics (Phase 0.5 troubleshooting) ----
+// Periodic census of what the inquiry radio actually hears — every device
+// report, not just the car. Distinguishes "nothing was in range" from "the
+// radio was starved", which free-running sighting logs cannot.
+#define RADIO_STATS_MS         (5u * 60u * 1000u)
+// WiFi/BT coexistence test. WiFi and classic BT share one antenna; if
+// coexistence is eating inquiry time, radio-quiet windows will hear more than
+// WiFi-up windows. Alternating them inside one run makes the two directly
+// comparable — same day, same car, same mounting spot. Every boot starts ON,
+// so OTA is always reachable within WIFI_TEST_ON_MS of a reset: no lockout,
+// and setting WIFI_DUTY_TEST to 0 ends the test.
+#define WIFI_DUTY_TEST         1
+#define WIFI_TEST_ON_MS        (10u * 60u * 1000u)
+#define WIFI_TEST_OFF_MS       (20u * 60u * 1000u)

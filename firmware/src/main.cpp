@@ -75,6 +75,12 @@ static bool timeSynced = false;
 static String coreDumpStatus = "none stored";
 static String lastAbortMsg = "none";
 
+// Alternating radio-quiet / WiFi-up windows, logged with the RADIO census so
+// the two are directly comparable. Boot always starts in the On phase.
+enum class WifiPhase : uint8_t { On, Off };
+static WifiPhase wifiPhase = WifiPhase::On;
+static uint32_t wifiPhaseSinceMs = 0, lastRadioStatsMs = 0;
+
 // Panic forensics (2 panics on day 1, no USB attached for a backtrace):
 // RTC noinit RAM survives crash resets, so the next boot can log where the
 // main loop last checkpointed and the lifetime-min free heap. A crash in
@@ -206,6 +212,14 @@ static std::atomic<uint32_t> otherDevReports{0};
 static std::atomic<int> otherBestRssi{-127};
 static std::atomic<uint32_t> carNoRssiReports{0};
 
+// Radio census, reset each RADIO line. Counts every inquiry response the
+// controller delivers — the car and anonymous neighbours alike — so a quiet
+// log can be read as "heard nothing" rather than "was not listening".
+static std::atomic<uint32_t> radReports{0};
+static std::atomic<uint32_t> radCarReports{0};
+static std::atomic<int> radBestRssi{-127};
+static uint32_t radCycles = 0;   // loop context only
+
 enum class ScanMode : uint8_t { Idle, Inquiry, Probe };
 static ScanMode scanMode = ScanMode::Idle;
 static uint32_t probeStartMs = 0, lastProbeMs = 0, lastInqDoneMs = 0;
@@ -247,7 +261,10 @@ static void gapCallback(esp_bt_gap_cb_event_t event, esp_bt_gap_cb_param_t *para
           }
         }
       }
+      radReports++;
+      if (hasRssi && rssi > radBestRssi) radBestRssi = rssi;
       if (memcmp(param->disc_res.bda, carAddr, 6) == 0) {
+        radCarReports++;
         // GAP delivers name-discovery results here too, without an RSSI prop;
         // those must not enter the RSSI pipeline as the +127 init value
         if (!hasRssi) {
@@ -622,6 +639,7 @@ static void scanTick() {
 static void onInquiryDone() {
   uint32_t now = millis();
   inqCycles++;
+  radCycles++;
   lastInqDoneMs = now;
   if (otaActive) {
     scanMode = ScanMode::Idle;
@@ -752,6 +770,12 @@ static void handleRoot() {
   h += "</td></tr>";
   h += "<tr><td>inquiry cycles</td><td>" + String(inqCycles) + " (other-device reports: " +
        String((unsigned)otherDevReports.load()) + ")</td></tr>";
+#if WIFI_DUTY_TEST
+  h += "<tr><td>coexistence test</td><td>WiFi up; going quiet for " +
+       fmtDur(WIFI_TEST_OFF_MS) + " in " +
+       fmtDur(WIFI_TEST_ON_MS - (now - wifiPhaseSinceMs)) +
+       " (detection keeps running; page returns after)</td></tr>";
+#endif
   h += "<tr><td>boot / uptime</td><td>#" + String(bootCount) + " / " + fmtDur(now) +
        (timeSynced ? "" : " — clock not NTP-synced yet") + "</td></tr>";
   h += "<tr><td>wifi / heap</td><td>" + String(WiFi.RSSI()) + " dBm / " +
@@ -905,6 +929,20 @@ static int64_t bootWallSec = 0;
 static uint32_t bootWallMs = 0;
 static void onNtpSync(struct timeval *tv) { (void)tv; ntpFired = true; }
 
+static void radioStats(const char *why) {
+  uint32_t reports = radReports.exchange(0);
+  uint32_t carRep = radCarReports.exchange(0);
+  int best = radBestRssi.exchange(-127);
+  uint32_t cyc = radCycles;
+  radCycles = 0;
+  lastRadioStatsMs = millis();
+  logEvent("RADIO", String(why) + ": wifi=" +
+                        (wifiPhase == WifiPhase::Off ? "off" : "on") +
+                        " cycles=" + String(cyc) + " reports=" + String(reports) +
+                        " car=" + String(carRep) + " best=" +
+                        (best > -127 ? String(best) + "dBm" : String("nothing heard")));
+}
+
 static void setupOtaOnce() {
   if (otaReady || !otaPasswordUsable()) return;
   ArduinoOTA.setHostname(DEVICE_HOSTNAME);
@@ -923,9 +961,49 @@ static void setupOtaOnce() {
   otaReady = true;
 }
 
+#if WIFI_DUTY_TEST
+static void wifiPhaseTick() {
+  uint32_t now = millis();
+  if (wifiPhase == WifiPhase::On && now - wifiPhaseSinceMs >= WIFI_TEST_ON_MS) {
+    radioStats("wifi-up window ended");
+    if (otaReady) {
+      ArduinoOTA.end();
+      otaReady = false;
+    }
+    if (mdnsReady) {
+      MDNS.end();
+      mdnsReady = false;
+    }
+    WiFi.disconnect(true);
+    WiFi.mode(WIFI_OFF);
+    wifiWasConnected = false;
+    wifiPhase = WifiPhase::Off;
+    wifiPhaseSinceMs = now;
+    logEvent("RADIO", "coexistence test: WiFi OFF for " + fmtDur(WIFI_TEST_OFF_MS) +
+                          " — detection continues, page/OTA unreachable until it returns");
+  } else if (wifiPhase == WifiPhase::Off && now - wifiPhaseSinceMs >= WIFI_TEST_OFF_MS) {
+    radioStats("radio-quiet window ended");
+    wifiPhase = WifiPhase::On;
+    wifiPhaseSinceMs = now;
+    WiFi.mode(WIFI_STA);
+    WiFi.setHostname(DEVICE_HOSTNAME);
+    WiFi.begin(WIFI_SSID, WIFI_PASS);
+    logEvent("RADIO", "coexistence test: WiFi back ON");
+  }
+}
+#endif
+
 static void wifiTick() {
+#if WIFI_DUTY_TEST
+  wifiPhaseTick();
+  if (wifiPhase == WifiPhase::Off) {
+    if (millis() - lastRadioStatsMs >= RADIO_STATS_MS) radioStats("periodic");
+    return;   // deliberately down: no reconnect kicks, no NTP
+  }
+#endif
   bool up = WiFi.status() == WL_CONNECTED;
   uint32_t now = millis();
+  if (now - lastRadioStatsMs >= RADIO_STATS_MS) radioStats("periodic");
   if (up && !wifiWasConnected) {
     logEvent("WIFI", "connected, ip " + WiFi.localIP().toString() + " rssi " +
                          String(WiFi.RSSI()));
@@ -1106,6 +1184,7 @@ void setup() {
 
   btQueue = xQueueCreate(32, sizeof(BtEv));
   stateSinceMs = lastEvidenceMs = lastInqDoneMs = lastProbeMs = millis();
+  wifiPhaseSinceMs = lastRadioStatsMs = millis();
 
   if (initBt()) {
     logEvent("BT", String("classic BT up, watching ") +
