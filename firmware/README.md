@@ -7,6 +7,28 @@ One codebase ([src/main.cpp](src/main.cpp)), two build targets
 |---|---|---|
 | `logger` | **Phase 0.5** one-week "would-open" logger. Full arrival pipeline from [PLAN.md](../PLAN.md), but the only output is the log — no GPIO is ever driven, nothing is wired. | verdicts in the log only |
 | `v1` | **Production.** Same pipeline; a strict arrival verdict can additionally pulse GPIO 26 → PC817 optocoupler → the sacrificial remote's button ([COMPONENTS.md](../COMPONENTS.md) wiring). | log + real button press |
+| `logger-ble` | Same logger, but the radio layer watches a **BLE beacon carried in the car** instead of the car's own head unit. Needs `BEACON_BLE_MAC` in config.h. | verdicts in the log only |
+
+### Why `logger-ble` exists (Phase 0.5 result, 2026-08-27)
+
+The car's own Bluetooth cannot drive arrival detection, and no tuning fixes it:
+
+- It answers inquiry **only while parked with someone inside** — never while
+  driving. A controlled test (a phone riding in the car as a positive control)
+  logged 523 phone responses and **zero** from the car across a drive out and
+  back; the car last answered three minutes before the car pulled out.
+- When it does answer it reads **~35 dB weaker than a phone in the same seat**
+  (−75 dBm vs −40 dBm), so it straddles the −80 dBm trigger even parked inside
+  the garage. No headroom is left to detect an approach.
+- So the car is visible only in the state that must *never* fire
+  (wake-in-place) and invisible in the one that must (arrival) — an exact
+  inversion. The `REFUSE` guard at −60 dBm never fired and, at these levels,
+  never can.
+
+A beacon replaces it with a strong, always-advertising, fixed-address signal
+the existing ramp logic can use — and because a beacon stays visible while the
+car is home, "away ≥ 10 min" becomes meaningful and wake-in-place stops being
+a special case.
 
 Board: Freenove ESP32-WROOM (FNK0090).
 
