@@ -59,7 +59,10 @@
 // long, timestamping the moment the car went quiet (drove off / fell asleep)
 #define SIGHT_AGG_QUIET_MS     (45u * 1000u)
 #define HEARTBEAT_MS           (30u * 60u * 1000u)
-#define LOG_ROTATE_BYTES       (80u * 1024u)   // 2 files x 80 KB in ~190 KB FS
+// The LittleFS partition (min_spiffs.csv "spiffs") is 128 KB, not the ~190 KB
+// the README claimed, and rotation keeps TWO files: 2 x 80 KB would have run
+// the filesystem out of space mid-week. 2 x 48 KB fits with room for metadata.
+#define LOG_ROTATE_BYTES       (48u * 1024u)   // 2 files x 48 KB in a 128 KB FS
 #define SIGHT_AGG_WINDOW_MS    (60u * 1000u)   // aggregate disarmed sightings
 #define RING_LINES             120             // in-RAM tail for the web page
 #define RING_LINE_LEN          168             // fits a full ENC summary line

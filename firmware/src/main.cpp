@@ -44,6 +44,10 @@
 #include "esp_bt.h"
 #include "esp_bt_main.h"
 #include "esp_gap_bt_api.h"
+#include "esp_core_dump.h"
+#include "esp_sntp.h"
+#include "esp_heap_caps.h"
+#include "esp_system.h"
 
 #ifndef FW_VERSION
 #define FW_VERSION "dev"
@@ -67,6 +71,9 @@ static WebServer server(80);
 
 static uint32_t bootCount = 0;
 static bool timeSynced = false;
+// filled in at boot by logCoreDump() / the abort wrapper, shown on the page
+static String coreDumpStatus = "none stored";
+static String lastAbortMsg = "none";
 
 // Panic forensics (2 panics on day 1, no USB attached for a backtrace):
 // RTC noinit RAM survives crash resets, so the next boot can log where the
@@ -78,13 +85,46 @@ RTC_NOINIT_ATTR static uint32_t bcStep;
 RTC_NOINIT_ATTR static uint32_t bcUptimeS;
 RTC_NOINIT_ATTR static uint32_t bcMinHeap;
 #define BC_MAGIC 0xB1DE0011u
+// 'ota' used to be the last crumb set before delay(10), so it covered nearly
+// all of the loop's wall time: every panic pointed there whatever the cause.
+// 'idle' now absorbs the delay, so 'ota' means ArduinoOTA.handle() for real and
+// 'idle' means the fault came from another task while the loop was parked.
 static const char *BC_NAMES[] = {"boot", "bt-queue", "machine-tick", "scan-tick",
-                                 "wifi-tick", "web-client", "ota", "heartbeat"};
+                                 "wifi-tick", "web-client", "ota", "heartbeat",
+                                 "idle"};
+#define BC_COUNT (sizeof(BC_NAMES) / sizeof(BC_NAMES[0]))
 static inline void crumb(uint32_t step) {
   bcStep = step;
   bcUptimeS = millis() / 1000;
   uint32_t mh = ESP.getMinFreeHeap();
   if (mh < bcMinHeap) bcMinHeap = mh;
+}
+
+// The core dump named the crashing task ('wifi'), but exccause 0xFFFF with a
+// one-entry corrupt backtrace means an abort(), not a CPU fault — and the
+// message explaining it went to a serial console nobody is attached to. Every
+// IDF abort path (failed assert(), ESP_ERROR_CHECK(), bare abort()) funnels
+// through esp_system_abort(details), so wrapping it (-Wl,--wrap in
+// platformio.ini) copies that message into RTC-noinit RAM, which survives the
+// reset. This runs in panic context: copy the string and nothing else — no
+// locks, no heap calls, since the abort may come from inside the allocator.
+#define ABORT_MSG_SZ 160
+RTC_NOINIT_ATTR static char abortMsg[ABORT_MSG_SZ];
+RTC_NOINIT_ATTR static uint32_t abortMagic;
+RTC_NOINIT_ATTR static uint32_t abortUptimeS;
+
+extern "C" void __real_esp_system_abort(const char *details) __attribute__((noreturn));
+extern "C" void __wrap_esp_system_abort(const char *details) {
+  size_t n = 0;
+  if (details)
+    while (n < ABORT_MSG_SZ - 1 && details[n]) {
+      abortMsg[n] = details[n];
+      n++;
+    }
+  abortMsg[n] = 0;
+  abortUptimeS = millis() / 1000;
+  abortMagic = BC_MAGIC;
+  __real_esp_system_abort(details);
 }
 
 static char ring[RING_LINES][RING_LINE_LEN];
@@ -619,7 +659,10 @@ static String htmlEscape(const String &s) {
 static void handleRoot() {
   uint32_t now = millis();
   String h;
-  h.reserve(9000);
+  // size for the tail actually being rendered: the old fixed 9000 covered the
+  // chrome but not 120 escaped log lines, so the last stretch of the page
+  // reallocated and memcpy'd repeatedly with old+new live on a ~39 KB heap
+  h.reserve(4096 + (unsigned)ringCount * 140);
   h += F("<!doctype html><html><head><meta charset=utf-8>"
          "<meta name=viewport content='width=device-width,initial-scale=1'>"
          "<title>bluedoor 0.5</title><style>"
@@ -703,6 +746,8 @@ static void handleRoot() {
   h += "<tr><td>wifi / heap</td><td>" + String(WiFi.RSSI()) + " dBm / " +
        String(ESP.getFreeHeap() / 1024) + " KB free</td></tr>";
   h += "<tr><td>fw</td><td>" FW_VERSION " built " __DATE__ " " __TIME__ "</td></tr>";
+  h += "<tr><td>last crash</td><td>" + htmlEscape(coreDumpStatus) + "</td></tr>";
+  h += "<tr><td>abort message</td><td>" + htmlEscape(lastAbortMsg) + "</td></tr>";
   h += "<tr><td>tunables</td><td>away=" + String(AWAY_MIN_MS / 60000) +
        "min trigger=" + String(RSSI_TRIGGER_DBM) + "dBm ramp&ge;" +
        String(APPROACH_MIN_RISE_DB) + "dB sightings&ge;" + String(APPROACH_MIN_SIGHTINGS) +
@@ -834,6 +879,14 @@ static void handleManualPulse() {
 static bool wifiWasConnected = false, otaReady = false, mdnsReady = false;
 static uint32_t lastWifiKickMs = 0;
 
+// Set from the SNTP task; logEvent() stays loop-only, so the loop does the
+// logging. bootWall* snapshot the clock the reset carried over, which lets the
+// first real sync report how far off it was.
+static volatile bool ntpFired = false;
+static int64_t bootWallSec = 0;
+static uint32_t bootWallMs = 0;
+static void onNtpSync(struct timeval *tv) { (void)tv; ntpFired = true; }
+
 static void setupOtaOnce() {
   if (otaReady || !otaPasswordUsable()) return;
   ArduinoOTA.setHostname(DEVICE_HOSTNAME);
@@ -874,9 +927,22 @@ static void wifiTick() {
     WiFi.reconnect();
   }
 
-  if (!timeSynced && time(nullptr) > 1700000000) {
+  // A warm reset (panic, watchdog, OTA) leaves the RTC running, so
+  // time(nullptr) is already plausible inside setup() and the old check fired
+  // before WiFi was even up: every crash boot logged an "NTP synced" line
+  // carrying the pre-reset clock, which had drifted minutes during the run
+  // that crashed. Wait for a real SNTP update, and report the correction so
+  // the timestamps on the crash-boot lines above can be read with it.
+  if (!timeSynced && ntpFired) {
     timeSynced = true;
-    logEvent("TIME", "NTP synced: " + tsNow() + " (earlier stamps are boot-relative)");
+    String extra;
+    if (bootWallSec) {
+      int64_t expect = bootWallSec + (int64_t)((millis() - bootWallMs) / 1000);
+      long skew = (long)((int64_t)time(nullptr) - expect);
+      extra = ", clock carried over the reset was off by " + String(skew) + "s";
+    }
+    logEvent("TIME", String("NTP synced: ") + tsNow() +
+                         (bootWallSec ? "" : " (earlier stamps are boot-relative)") + extra);
   }
 }
 
@@ -884,6 +950,49 @@ static void wifiTick() {
 
 static uint32_t lastHeartbeatMs = 0, lastTickMs = 0;
 static uint32_t hbSightings = 0, hbCycles = 0, hbOther = 0;
+
+// The Arduino SDK ships with core-dump-to-flash enabled and min_spiffs.csv
+// already carries a 64 KB coredump partition, so every panic since day one has
+// written a full ELF dump there — nothing ever read it back. Summarise it into
+// the log at boot: crashing task, exception cause and the backtrace PCs, which
+// decode offline against the firmware.elf of the build that crashed:
+//   xtensa-esp32-elf-addr2line -pfiaC -e firmware.elf <pc> <pc> ...
+// The raw dump is deliberately NOT served over HTTP: it is a RAM image and
+// would hand out WiFi/OTA credentials to anyone on the LAN.
+static void logCoreDump() {
+  size_t addr = 0, size = 0;
+  if (esp_core_dump_image_get(&addr, &size) != ESP_OK || size == 0) return;
+  coreDumpStatus = String((unsigned)size) + " byte dump in flash";
+  if (esp_core_dump_image_check() != ESP_OK) {
+    coreDumpStatus += " (bad checksum)";
+    logEvent("ERR", "core dump present (" + String((unsigned)size) +
+                        " bytes) but failed its checksum");
+    return;
+  }
+  bool reported = false;
+  esp_core_dump_summary_t *sum =
+      (esp_core_dump_summary_t *)malloc(sizeof(esp_core_dump_summary_t));
+  if (!sum) return;
+  if (esp_core_dump_get_summary(sum) == ESP_OK) {
+    String bt;
+    for (uint32_t i = 0; i < sum->exc_bt_info.depth && i < 16; i++)
+      bt += (i ? " 0x" : "0x") + String(sum->exc_bt_info.bt[i], HEX);
+    coreDumpStatus = String("task '") + sum->exc_task + "' pc=0x" +
+                     String(sum->exc_pc, HEX) + " cause=" +
+                     String(sum->ex_info.exc_cause);
+    reported = true;
+    logEvent("ERR", String("core dump: task '") + sum->exc_task + "' pc=0x" +
+                        String(sum->exc_pc, HEX) + " exccause=" +
+                        String(sum->ex_info.exc_cause) + " excvaddr=0x" +
+                        String(sum->ex_info.exc_vaddr, HEX) +
+                        (sum->exc_bt_info.corrupted ? " (backtrace corrupt)" : "") +
+                        " backtrace: " + bt);
+  }
+  free(sum);
+  // erase once reported, so a "core dump:" line always means a fresh crash
+  // rather than the same old dump re-announced at every boot
+  if (reported) esp_core_dump_image_erase();
+}
 
 static const char *resetReasonStr() {
   switch (esp_reset_reason()) {
@@ -916,6 +1025,11 @@ void setup() {
   // OTA), and without this those boots stamp UTC until WiFi re-syncs
   setenv("TZ", TZ_INFO, 1);
   tzset();
+  if (time(nullptr) > 1700000000) {   // a warm reset carried the clock over
+    bootWallSec = (int64_t)time(nullptr);
+    bootWallMs = millis();
+  }
+  sntp_set_time_sync_notification_cb(onNtpSync);
 
   prefs.begin("bluedoor", false);
   bootCount = prefs.getUInt("boot", 0) + 1;
@@ -936,9 +1050,17 @@ void setup() {
                        String(bootCount));
   if (esp_reset_reason() == ESP_RST_PANIC && bcMagic == BC_MAGIC)
     logEvent("ERR", "panic forensics: last loop checkpoint '" +
-                        String(bcStep < 8 ? BC_NAMES[bcStep] : "?") + "' at uptime " +
+                        String(bcStep < BC_COUNT ? BC_NAMES[bcStep] : "?") + "' at uptime " +
                         String(bcUptimeS) + "s, min free heap " +
                         String(bcMinHeap / 1024) + "K");
+  if (abortMagic == BC_MAGIC) {
+    abortMsg[ABORT_MSG_SZ - 1] = 0;
+    lastAbortMsg = String(abortMsg);
+    logEvent("ERR", "abort message from the crash: " + lastAbortMsg + " (at uptime " +
+                        String(abortUptimeS) + "s)");
+  }
+  abortMagic = 0;   // never report a stale message against a later reset
+  logCoreDump();
   bcMagic = BC_MAGIC;
   bcStep = 0;
   bcUptimeS = 0;
@@ -1037,7 +1159,9 @@ void loop() {
     logEvent("HB", String(stateName(sysState)) + " sightings=" + String(hbSightings) +
                        " cycles=" + String(hbCycles) + " otherdevs=" + String(other) +
                        " heap=" + String(ESP.getFreeHeap() / 1024) + "K min=" +
-                       String(ESP.getMinFreeHeap() / 1024) + "K wifi=" +
+                       String(ESP.getMinFreeHeap() / 1024) + "K big=" +
+                       String(heap_caps_get_largest_free_block(MALLOC_CAP_8BIT) / 1024) +
+                       "K wifi=" +
                        String(WiFi.status() == WL_CONNECTED ? WiFi.RSSI() : 0));
     hbSightings = hbCycles = 0;
   }
@@ -1046,5 +1170,6 @@ void loop() {
   server.handleClient();
   crumb(6);
   if (otaReady) ArduinoOTA.handle();
+  crumb(8);
   delay(10);
 }

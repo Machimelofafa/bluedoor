@@ -54,7 +54,7 @@ If USB upload fails with a permission error, add yourself to `dialout`
 - **Mark button**: when you actually arrive by car (or test wake-in-place by
   opening the parked car's door), tap "Mark in log" with a note — ground
   truth to correlate against verdicts.
-- Full log: `/log` (rotates at 80 KB into `/log.old`); download both when
+- Full log: `/log` (rotates at 48 KB into `/log.old`); download both when
   visiting. Serial mirrors everything. WiFi loss never stops detection.
 - Every boot starts DISARMED until a 10-min car-free period; verdict counters
   persist across reboots (NVS).
@@ -135,7 +135,7 @@ BT sighting ─▶ state machine ─▶ strict verdict ─▶ run-mode gate ─�
 - WiFi + classic BT share the radio (coexistence enabled in the stock Arduino
   core); a slightly sluggish web page while inquiry runs is normal. Detection
   never depends on WiFi.
-- Partition scheme `min_spiffs`: OTA stays possible, ~190 KB LittleFS holds
+- Partition scheme `min_spiffs`: OTA stays possible, a 128 KB LittleFS holds
   ~2 weeks of logs across the two rotation files.
 - Security posture (PLAN.md): convenience-lock grade. Controls are LAN-only +
   token; a spoofed MAC still has to fake an approach ramp after a real away
