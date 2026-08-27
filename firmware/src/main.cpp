@@ -656,13 +656,24 @@ static String htmlEscape(const String &s) {
   return o;
 }
 
+// Flush the page out in ~1 KB pieces. Building it whole meant a single
+// ~20 KB allocation (chrome + 120 escaped tail lines) on a heap that idles at
+// ~38 KB free with a largest free block of only ~18 KB — the page was by far
+// the biggest thing this firmware ever asked for, and heartbeats show min-heap
+// dropping to 15 KB whenever someone loads it. Chunked, it costs ~1 KB.
+static void chunk(String &h, bool force = false) {
+  if (h.length() >= 1024 || (force && h.length())) {
+    server.sendContent(h);
+    h = "";
+  }
+}
+
 static void handleRoot() {
   uint32_t now = millis();
   String h;
-  // size for the tail actually being rendered: the old fixed 9000 covered the
-  // chrome but not 120 escaped log lines, so the last stretch of the page
-  // reallocated and memcpy'd repeatedly with old+new live on a ~39 KB heap
-  h.reserve(4096 + (unsigned)ringCount * 140);
+  h.reserve(1600);
+  server.setContentLength(CONTENT_LENGTH_UNKNOWN);
+  server.send(200, "text/html", "");
   h += F("<!doctype html><html><head><meta charset=utf-8>"
          "<meta name=viewport content='width=device-width,initial-scale=1'>"
          "<title>bluedoor 0.5</title><style>"
@@ -772,17 +783,20 @@ static void handleRoot() {
          "maxlength=80> <button>Mark in log</button></form>"
          "<p><a href=/log>download log</a> &middot; <a href=/log.old>previous log</a> &middot; "
          "<a href=/tail>plain tail</a></p><pre>");
+  chunk(h, true);
   for (int i = 0; i < ringCount; i++) {
     int idx = (ringHead - 1 - i + RING_LINES) % RING_LINES;
     h += htmlEscape(ring[idx]);
     h += '\n';
+    chunk(h);
   }
   // auto-refresh, but never while someone is typing in a form field
   h += F("</pre><script>var ff=document.querySelectorAll('input');"
          "setInterval(function(){for(var k=0;k<ff.length;k++){var e=ff[k];"
          "if(document.activeElement===e||e.value)return;}location.reload();},10000);"
          "</script></body></html>");
-  server.send(200, "text/html", h);
+  chunk(h, true);
+  server.sendContent("");   // terminates the chunked response
 }
 
 static void handleMark() {
@@ -807,13 +821,17 @@ static void handleLogFile(const char *path) {
 
 static void handleTail() {
   String o;
-  o.reserve(ringCount * RING_LINE_LEN / 2);
+  o.reserve(1600);
+  server.setContentLength(CONTENT_LENGTH_UNKNOWN);
+  server.send(200, "text/plain", "");
   for (int i = 0; i < ringCount; i++) {
     int idx = (ringHead - ringCount + i + RING_LINES) % RING_LINES;
     o += ring[idx];
     o += '\n';
+    chunk(o);
   }
-  server.send(200, "text/plain", o);
+  chunk(o, true);
+  server.sendContent("");
 }
 
 #if PULSE_ENABLED
