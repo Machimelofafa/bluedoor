@@ -24,13 +24,29 @@ ELF="$DIR/../.pio/build/logger/firmware.elf"
 [ -e "$PORT" ] || { echo "no $PORT — is the board plugged in?"; exit 1; }
 [ -f "$ELF" ] && cp "$ELF" "$DIR/firmware-$STAMP.elf"
 
-stty -F "$PORT" 115200 raw -echo -echoe -echok
-
-echo "capturing $PORT -> $LOG  (ctrl-c to stop)"
-exec python3 -u -c '
+# The CH340 can fall off the bus and re-enumerate (seen live 22:35 on soak
+# night one: error -71, host power-cycled the port, reader got EOF after 14
+# minutes). Survive it: reopen forever, and re-run stty every time — a fresh
+# enumeration resets the port to 9600 baud. clocal so a modem-line hiccup
+# can't hang up the reader.
+echo "capturing $PORT -> $LOG  (ctrl-c to stop; survives USB re-enumeration)"
+while true; do
+  if [ ! -e "$PORT" ] || ! stty -F "$PORT" 115200 raw -echo -echoe -echok clocal 2>/dev/null; then
+    sleep 2
+    continue
+  fi
+  python3 -u -c '
 import sys, datetime
-for line in sys.stdin.buffer:
-    stamp = datetime.datetime.now().strftime("%m-%d %H:%M:%S.%f")[:-3]
-    sys.stdout.buffer.write(stamp.encode() + b" " + line)
-    sys.stdout.buffer.flush()
-' < "$PORT" >> "$LOG"
+try:
+    for line in sys.stdin.buffer:
+        stamp = datetime.datetime.now().strftime("%m-%d %H:%M:%S.%f")[:-3]
+        sys.stdout.buffer.write(stamp.encode() + b" " + line)
+        sys.stdout.buffer.flush()
+except OSError:
+    pass
+' < "$PORT" >> "$LOG" || true
+  MARK="$(date '+%m-%d %H:%M:%S') CAPTURE port dropped (USB re-enumeration?) — reopening"
+  echo "$MARK" >> "$LOG"
+  echo "$MARK"
+  sleep 2
+done
