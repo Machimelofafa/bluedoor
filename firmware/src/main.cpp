@@ -110,7 +110,14 @@ RTC_NOINIT_ATTR static uint32_t bcMagic;
 RTC_NOINIT_ATTR static uint32_t bcStep;
 RTC_NOINIT_ATTR static uint32_t bcUptimeS;
 RTC_NOINIT_ATTR static uint32_t bcMinHeap;
-#define BC_MAGIC 0xB1DE0011u
+// Salted with the build timestamp: RTC-noinit variables move between builds,
+// and the first boot after an OTA otherwise validates stale bytes from the
+// old layout as evidence (seen live at boot #30 — a garbage "abort message"
+// logged right after reflashing). A different build's leftovers never match.
+static constexpr uint32_t bcMagicHash(const char *s, uint32_t h) {
+  return *s ? bcMagicHash(s + 1, h * 31u + (uint8_t)*s) : h;
+}
+#define BC_MAGIC bcMagicHash(__DATE__ " " __TIME__, 0xB1DE0011u)
 // 'ota' used to be the last crumb set before delay(10), so it covered nearly
 // all of the loop's wall time: every panic pointed there whatever the cause.
 // 'idle' now absorbs the delay, so 'ota' means ArduinoOTA.handle() for real and
@@ -151,6 +158,19 @@ extern "C" void __wrap_esp_system_abort(const char *details) {
   abortUptimeS = millis() / 1000;
   abortMagic = BC_MAGIC;
   __real_esp_system_abort(details);
+}
+
+// The task WDT's panic path should reach the abort wrapper above, but an
+// int-wdt reset never calls esp_system_abort at all — it dies in an NMI.
+// This weak IDF hook runs first thing in the task-WDT ISR, so after the
+// reset-reason split a boot can read the watchdogs unambiguously: task-wdt
+// reset + this breadcrumb + an abort message is the expected trio; a
+// watchdog reset with neither means the int-wdt (coex/ISR stall) got us.
+RTC_NOINIT_ATTR static uint32_t twdtMagic;
+RTC_NOINIT_ATTR static uint32_t twdtUptimeS;
+extern "C" void esp_task_wdt_isr_user_handler(void) {
+  twdtMagic = BC_MAGIC;
+  twdtUptimeS = millis() / 1000;
 }
 
 static char ring[RING_LINES][RING_LINE_LEN];
@@ -1070,6 +1090,44 @@ static void handleManualPulse() {
 static bool wifiWasConnected = false, otaReady = false, mdnsReady = false;
 static uint32_t lastWifiKickMs = 0;
 
+// wifiTick's polled edge sees "down" but never why. The WiFi event task
+// records the driver's reason code here (no logEvent — that is loop-only)
+// and counts every drop, including churn faster than the 500ms poll.
+static volatile uint8_t wifiLastDiscReason = 0;
+static std::atomic<uint32_t> wifiDropCount{0};
+
+// names for the codes that decide between the stability hypotheses; anything
+// else stays numeric and looks up in esp_wifi_types.h
+static const char *wifiDiscReasonStr(uint8_t r) {
+  switch (r) {
+    case WIFI_REASON_AUTH_EXPIRE: return " auth-expire";
+    case WIFI_REASON_ASSOC_LEAVE: return " assoc-leave";
+    case WIFI_REASON_4WAY_HANDSHAKE_TIMEOUT: return " 4way-handshake-timeout";
+    case WIFI_REASON_BEACON_TIMEOUT: return " beacon-timeout(weak link)";
+    case WIFI_REASON_NO_AP_FOUND: return " no-ap-found";
+    case WIFI_REASON_AUTH_FAIL: return " auth-fail";
+    case WIFI_REASON_ASSOC_FAIL: return " assoc-fail";
+    case WIFI_REASON_HANDSHAKE_TIMEOUT: return " handshake-timeout";
+    case WIFI_REASON_CONNECTION_FAIL: return " connection-fail";
+    default: return "";
+  }
+}
+
+// Heap-pressure hypothesis, caught in the act instead of inferred: the heap
+// calls this on any failed malloc, from whatever task made it — counters
+// only here, the heartbeat does the reporting.
+static std::atomic<uint32_t> allocFailCount{0};
+static std::atomic<uint32_t> allocFailLastSize{0};
+static void onAllocFailed(size_t size, uint32_t caps, const char *fn) {
+  (void)caps; (void)fn;
+  allocFailCount++;
+  allocFailLastSize = (uint32_t)size;
+}
+
+// every web hit, counted at registration below (plus 404s via onNotFound) —
+// correlates page traffic with resets and heap dips
+static std::atomic<uint32_t> httpReqCount{0};
+
 // Set from the SNTP task; logEvent() stays loop-only, so the loop does the
 // logging. bootWall* snapshot the clock the reset carried over, which lets the
 // first real sync report how far off it was.
@@ -1163,7 +1221,9 @@ static void wifiTick() {
     }
     setupOtaOnce();
   } else if (!up && wifiWasConnected) {
-    logEvent("WIFI", "disconnected — detection continues, page/NTP unavailable");
+    logEvent("WIFI", "disconnected, reason " + String((unsigned)wifiLastDiscReason) +
+                         wifiDiscReasonStr(wifiLastDiscReason) +
+                         " — detection continues, page/NTP unavailable");
   }
   wifiWasConnected = up;
 
@@ -1236,7 +1296,8 @@ static void logCoreDump() {
   free(sum);
   // erase once reported, so a "core dump:" line always means a fresh crash
   // rather than the same old dump re-announced at every boot
-  if (reported) esp_core_dump_image_erase();
+  if (reported && esp_core_dump_image_erase() != ESP_OK)
+    logEvent("ERR", "core dump erase failed — the next boot will re-report this same dump");
 }
 
 static const char *resetReasonStr() {
@@ -1244,9 +1305,13 @@ static const char *resetReasonStr() {
     case ESP_RST_POWERON: return "power-on";
     case ESP_RST_SW: return "software";
     case ESP_RST_PANIC: return "panic";
-    case ESP_RST_INT_WDT:
-    case ESP_RST_TASK_WDT:
-    case ESP_RST_WDT: return "watchdog";
+    // The three watchdogs indict different suspects, so never merge them:
+    // int-wdt = interrupts stayed off >300ms (ISR/critical section — the
+    // classic WiFi+BT coexistence failure), task-wdt = IDLE0 starved >5s by
+    // a runaway task, rtc-wdt = a hang before the app even ran.
+    case ESP_RST_INT_WDT: return "int-wdt";
+    case ESP_RST_TASK_WDT: return "task-wdt";
+    case ESP_RST_WDT: return "rtc-wdt";
     case ESP_RST_BROWNOUT: return "brownout";
     default: return "other";
   }
@@ -1293,8 +1358,13 @@ void setup() {
   logEvent("BOOT", String("bluedoor ") + FW_VERSION + " (" + FW_ROLE + ") built " + __DATE__ +
                        " " + __TIME__ + ", reset: " + resetReasonStr() + ", boot #" +
                        String(bootCount));
-  if (esp_reset_reason() == ESP_RST_PANIC && bcMagic == BC_MAGIC)
-    logEvent("ERR", "panic forensics: last loop checkpoint '" +
+  // Watchdog resets carry the same breadcrumbs a panic does — the crumb says
+  // what loop was doing (or that it was parked in 'idle') when the WDT hit.
+  esp_reset_reason_t bootRR = esp_reset_reason();
+  bool crashBoot = bootRR == ESP_RST_PANIC || bootRR == ESP_RST_INT_WDT ||
+                   bootRR == ESP_RST_TASK_WDT || bootRR == ESP_RST_WDT;
+  if (crashBoot && bcMagic == BC_MAGIC)
+    logEvent("ERR", "crash forensics: last loop checkpoint '" +
                         String(bcStep < BC_COUNT ? BC_NAMES[bcStep] : "?") + "' at uptime " +
                         String(bcUptimeS) + "s, min free heap " +
                         String(bcMinHeap / 1024) + "K");
@@ -1305,6 +1375,10 @@ void setup() {
                         String(abortUptimeS) + "s)");
   }
   abortMagic = 0;   // never report a stale message against a later reset
+  if (twdtMagic == BC_MAGIC)
+    logEvent("ERR", "task watchdog fired at uptime " + String(twdtUptimeS) +
+                        "s in the run before this boot");
+  twdtMagic = 0;
   logCoreDump();
   bcMagic = BC_MAGIC;
   bcStep = 0;
@@ -1344,20 +1418,35 @@ void setup() {
     logEvent("ERR", "BT init failed — logger is blind! check build/config");
   }
 
+  heap_caps_register_failed_alloc_callback(onAllocFailed);
+
+  // registered before begin() so even the very first association failure
+  // leaves its reason code
+  WiFi.onEvent(
+      [](WiFiEvent_t, WiFiEventInfo_t info) {
+        wifiLastDiscReason = info.wifi_sta_disconnected.reason;
+        wifiDropCount++;
+      },
+      ARDUINO_EVENT_WIFI_STA_DISCONNECTED);
+
   WiFi.mode(WIFI_STA);
   WiFi.setHostname(DEVICE_HOSTNAME);
   WiFi.setAutoReconnect(true);
   WiFi.begin(WIFI_SSID, WIFI_PASS);
 
-  server.on("/", HTTP_GET, handleRoot);
-  server.on("/mark", HTTP_POST, handleMark);
+  server.on("/", HTTP_GET, []() { httpReqCount++; handleRoot(); });
+  server.on("/mark", HTTP_POST, []() { httpReqCount++; handleMark(); });
 #if PULSE_ENABLED
-  server.on("/mode", HTTP_POST, handleMode);
-  server.on("/pulse", HTTP_POST, handleManualPulse);
+  server.on("/mode", HTTP_POST, []() { httpReqCount++; handleMode(); });
+  server.on("/pulse", HTTP_POST, []() { httpReqCount++; handleManualPulse(); });
 #endif
-  server.on("/log", HTTP_GET, []() { handleLogFile(LOG_CUR); });
-  server.on("/log.old", HTTP_GET, []() { handleLogFile(LOG_OLD); });
-  server.on("/tail", HTTP_GET, handleTail);
+  server.on("/log", HTTP_GET, []() { httpReqCount++; handleLogFile(LOG_CUR); });
+  server.on("/log.old", HTTP_GET, []() { httpReqCount++; handleLogFile(LOG_OLD); });
+  server.on("/tail", HTTP_GET, []() { httpReqCount++; handleTail(); });
+  server.onNotFound([]() {
+    httpReqCount++;
+    server.send(404, "text/plain", "not found");
+  });
   server.begin();
 
   lastHeartbeatMs = millis();
@@ -1402,13 +1491,20 @@ void loop() {
     lastHeartbeatMs = now;
     crumb(7);
     uint32_t other = otherDevReports.exchange(0);
+    uint32_t http = httpReqCount.exchange(0);
+    uint32_t wdrop = wifiDropCount.exchange(0);
+    uint32_t afail = allocFailCount.load();   // cumulative: rare and alarming
     logEvent("HB", String(stateName(sysState)) + " sightings=" + String(hbSightings) +
                        " cycles=" + String(hbCycles) + " otherdevs=" + String(other) +
                        " heap=" + String(ESP.getFreeHeap() / 1024) + "K min=" +
                        String(ESP.getMinFreeHeap() / 1024) + "K big=" +
                        String(heap_caps_get_largest_free_block(MALLOC_CAP_8BIT) / 1024) +
                        "K wifi=" +
-                       String(WiFi.status() == WL_CONNECTED ? WiFi.RSSI() : 0));
+                       String(WiFi.status() == WL_CONNECTED ? WiFi.RSSI() : 0) +
+                       " http=" + String(http) + " wifidrop=" + String(wdrop) +
+                       (afail ? " ALLOCFAIL=" + String(afail) + " last=" +
+                                    String(allocFailLastSize.load()) + "b"
+                              : ""));
     hbSightings = hbCycles = 0;
   }
 

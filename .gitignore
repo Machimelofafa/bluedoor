@@ -10,6 +10,9 @@ build/
 *.bin
 *.elf
 
+# Overnight soak captures (script itself is tracked)
+firmware/soak/*.log
+
 # If this repo is ever shared/pushed (see PLAN.md data-hygiene note):
 # move the car MAC into secrets.h and uncomment, and purge media/ from history
 # secrets.h
