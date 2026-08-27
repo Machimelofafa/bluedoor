@@ -78,6 +78,16 @@
 // comparable — same day, same car, same mounting spot. Every boot starts ON,
 // so OTA is always reachable within WIFI_TEST_ON_MS of a reset: no lockout,
 // and setting WIFI_DUTY_TEST to 0 ends the test.
-#define WIFI_DUTY_TEST         1
+#define WIFI_DUTY_TEST         0
 #define WIFI_TEST_ON_MS        (10u * 60u * 1000u)
 #define WIFI_TEST_OFF_MS       (20u * 60u * 1000u)
+
+// ---- BLE beacon mode (DETECT_BLE=1 builds, see platformio.ini env logger-ble) ----
+// Commissioning survey: logs the strongest BLE advertiser's address once a
+// minute so a beacon held against the box identifies itself. Set to 0 once
+// BEACON_BLE_MAC is filled in — it is the only place this firmware records
+// an address that is not the target's.
+#define BLE_SURVEY             1
+#define BLE_SURVEY_MS          (60u * 1000u)
+// BLE scanning runs continuously; restart it this often as a liveness watchdog.
+#define BLE_SCAN_RESTART_MS    (5u * 60u * 1000u)

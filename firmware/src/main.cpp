@@ -55,6 +55,26 @@
 #ifndef PULSE_ENABLED
 #define PULSE_ENABLED 0
 #endif
+// Phase 0.5 result (2026-08-27): the car's own head unit cannot support arrival
+// detection. It answers inquiry only while parked with someone inside — never
+// while driving — and reads ~35 dB weaker than a phone in the same seat, so it
+// straddles the trigger threshold even parked inside the garage. DETECT_BLE
+// swaps the radio layer to watch a BLE beacon carried in the car instead: a
+// strong, always-advertising, fixed-MAC signal the ramp logic can actually use.
+#ifndef DETECT_BLE
+#define DETECT_BLE 0
+#endif
+#if DETECT_BLE
+#include "esp_gap_ble_api.h"
+#ifndef BEACON_BLE_MAC          // add the real one to config.h once you own it
+#define BEACON_BLE_MAC "AA:BB:CC:DD:EE:FF"
+#endif
+#define TARGET_MAC BEACON_BLE_MAC
+#define TARGET_KIND "beacon"
+#else
+#define TARGET_MAC CAR_BT_MAC
+#define TARGET_KIND "car"
+#endif
 #if PULSE_ENABLED
 #define FW_ROLE "v1"
 #else
@@ -299,6 +319,13 @@ static void gapCallback(esp_bt_gap_cb_event_t event, esp_bt_gap_cb_param_t *para
   }
 }
 
+#if DETECT_BLE
+static void startInquiry() {
+  esp_ble_gap_stop_scanning();
+  esp_ble_gap_start_scanning(0);
+  scanMode = ScanMode::Inquiry;
+}
+#else
 static void startInquiry() {
   esp_err_t err = esp_bt_gap_start_discovery(ESP_BT_INQ_MODE_GENERAL_INQUIRY,
                                              INQ_LEN_UNITS, 0);
@@ -309,7 +336,91 @@ static void startInquiry() {
     logEvent("ERR", "start_discovery failed: " + String(esp_err_to_name(err)));
   }
 }
+#endif  // DETECT_BLE
 
+#if DETECT_BLE
+// Passive scan: beacons broadcast, so there is nothing to scan-request. Duplicate
+// filtering off — every advertisement is an RSSI sample, and the ramp logic wants
+// samples, not unique devices.
+static esp_ble_scan_params_t bleScanParams = {
+    .scan_type = BLE_SCAN_TYPE_PASSIVE,
+    .own_addr_type = BLE_ADDR_TYPE_PUBLIC,
+    .scan_filter_policy = BLE_SCAN_FILTER_ALLOW_ALL,
+    .scan_interval = 0x50,   // 50 ms, in 0.625 ms units
+    .scan_window = 0x30,     // 30 ms listening out of each 50
+    .scan_duplicate = BLE_SCAN_DUPLICATE_DISABLE,
+};
+
+#if BLE_SURVEY
+// Commissioning aid: the beacon's address is unknown until you own one, so log
+// the strongest advertiser seen each interval — hold the beacon against the box
+// and its MAC appears in the log. This is the ONE place this firmware records
+// somebody else's address, so it is deliberate and opt-out: set BLE_SURVEY to 0
+// once BEACON_BLE_MAC is in config.h. (Phones randomise their BLE address.)
+static portMUX_TYPE surveyMux = portMUX_INITIALIZER_UNLOCKED;
+static uint8_t surveyBda[6];
+static int surveyRssi = -127;
+static char surveyName[32];
+static uint32_t lastSurveyMs = 0;
+#endif
+
+static void bleGapCallback(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param_t *param) {
+  switch (event) {
+    case ESP_GAP_BLE_SCAN_PARAM_SET_COMPLETE_EVT:
+      esp_ble_gap_start_scanning(0);   // 0 = until explicitly stopped
+      break;
+    case ESP_GAP_BLE_SCAN_RESULT_EVT: {
+      if (param->scan_rst.search_evt != ESP_GAP_SEARCH_INQ_RES_EVT) break;
+      int8_t rssi = (int8_t)param->scan_rst.rssi;
+      char name[33] = {0};
+      uint8_t nlen = 0;
+      uint8_t *n = esp_ble_resolve_adv_data(param->scan_rst.ble_adv,
+                                            ESP_BLE_AD_TYPE_NAME_CMPL, &nlen);
+      if (!n) n = esp_ble_resolve_adv_data(param->scan_rst.ble_adv,
+                                           ESP_BLE_AD_TYPE_NAME_SHORT, &nlen);
+      if (n && nlen) memcpy(name, n, nlen < 32 ? nlen : 32);
+
+      radReports++;
+      if (rssi > radBestRssi) radBestRssi = rssi;
+      if (memcmp(param->scan_rst.bda, carAddr, 6) == 0) {
+        radCarReports++;
+        BtEv ev{BtEvKind::Sighting, rssi, true, {0}};
+        strlcpy(ev.name, name, sizeof(ev.name));
+        xQueueSend(btQueue, &ev, 0);
+      } else {
+        otherDevReports++;
+        if (rssi > otherBestRssi) otherBestRssi = rssi;
+      }
+#if BLE_SURVEY
+      portENTER_CRITICAL(&surveyMux);
+      if (rssi > surveyRssi) {
+        surveyRssi = rssi;
+        memcpy(surveyBda, param->scan_rst.bda, 6);
+        strlcpy(surveyName, name, sizeof(surveyName));
+      }
+      portEXIT_CRITICAL(&surveyMux);
+#endif
+      break;
+    }
+    default:
+      break;
+  }
+}
+
+static bool initBt() {
+  // BLE-only: hand the classic BT controller's RAM back (tens of KB on a heap
+  // that idles near 38 KB) — the car's classic radio is no longer watched.
+  esp_bt_controller_mem_release(ESP_BT_MODE_CLASSIC_BT);
+  esp_bt_controller_config_t cfg = BT_CONTROLLER_INIT_CONFIG_DEFAULT();
+  cfg.mode = ESP_BT_MODE_BLE;
+  if (esp_bt_controller_init(&cfg) != ESP_OK) return false;
+  if (esp_bt_controller_enable(ESP_BT_MODE_BLE) != ESP_OK) return false;
+  if (esp_bluedroid_init() != ESP_OK) return false;
+  if (esp_bluedroid_enable() != ESP_OK) return false;
+  if (esp_ble_gap_register_callback(bleGapCallback) != ESP_OK) return false;
+  return esp_ble_gap_set_scan_params(&bleScanParams) == ESP_OK;   // starts the scan
+}
+#else
 static bool initBt() {
   if (!btStart()) return false;
   if (esp_bluedroid_init() != ESP_OK) return false;
@@ -319,6 +430,7 @@ static bool initBt() {
   esp_bt_gap_set_scan_mode(ESP_BT_NON_CONNECTABLE, ESP_BT_NON_DISCOVERABLE);
   return true;
 }
+#endif  // DETECT_BLE
 
 // ---------------------------------------------------------- state machine
 
@@ -617,6 +729,42 @@ static void machineTick() {
 
 // -------------------------------------------------------------- scan loop
 
+#if DETECT_BLE
+// BLE scanning is continuous, so there is no per-cycle completion event: restart
+// it periodically as a liveness watchdog, and keep the RADIO census's "cycles"
+// meaningful as scan restarts rather than inquiry sweeps.
+static void scanTick() {
+  if (otaActive) return;
+  uint32_t now = millis();
+  if (now - lastInqDoneMs >= BLE_SCAN_RESTART_MS) {
+    lastInqDoneMs = now;
+    inqCycles++;
+    radCycles++;
+    startInquiry();
+  }
+#if BLE_SURVEY
+  if (now - lastSurveyMs >= BLE_SURVEY_MS) {
+    lastSurveyMs = now;
+    uint8_t b[6];
+    int r;
+    char n[32];
+    portENTER_CRITICAL(&surveyMux);
+    memcpy(b, surveyBda, 6);
+    r = surveyRssi;
+    strlcpy(n, surveyName, sizeof(n));
+    surveyRssi = -127;
+    portEXIT_CRITICAL(&surveyMux);
+    if (r > -127) {
+      char mac[18];
+      snprintf(mac, sizeof(mac), "%02X:%02X:%02X:%02X:%02X:%02X", b[0], b[1], b[2], b[3],
+               b[4], b[5]);
+      logEvent("SURVEY", String("strongest BLE advertiser: ") + mac + " rssi " + String(r) +
+                             (n[0] ? String(" '") + n + "'" : String("")));
+    }
+  }
+#endif
+}
+#else
 static void scanTick() {
   if (otaActive) return;
   uint32_t now = millis();
@@ -635,6 +783,7 @@ static void scanTick() {
   }
   if (scanMode == ScanMode::Idle) startInquiry();
 }
+#endif  // DETECT_BLE
 
 static void onInquiryDone() {
   uint32_t now = millis();
@@ -1168,13 +1317,13 @@ void setup() {
   logEvent("STATE", String("boot-disarmed: first sighting after boot is never an arrival; "
                            "arming needs ") + fmtDur(AWAY_MIN_MS) + " with no car evidence");
 
-  if (!parseMac(CAR_BT_MAC, carAddr)) {
+  if (!parseMac(TARGET_MAC, carAddr)) {
     carMacIsPlaceholder = true;
-    logEvent("ERR", "CAR_BT_MAC unparseable — fix config.h");
-  } else if (strcasecmp(CAR_BT_MAC, "AA:BB:CC:DD:EE:FF") == 0) {
+    logEvent("ERR", TARGET_KIND " MAC unparseable — fix config.h");
+  } else if (strcasecmp(TARGET_MAC, "AA:BB:CC:DD:EE:FF") == 0) {
     carMacIsPlaceholder = true;
-    logEvent("ERR", "config.h has the placeholder car MAC — copy config.example.h to "
-                    "config.h and fill it in");
+    logEvent("ERR", "config.h has the placeholder " TARGET_KIND " MAC — fill it in "
+                    "(see config.example.h)");
   }
   if (strcmp(WIFI_SSID, "your-wifi-ssid") == 0)
     logEvent("ERR", "config.h has placeholder WiFi credentials — web page will not come up");
@@ -1188,7 +1337,7 @@ void setup() {
 
   if (initBt()) {
     logEvent("BT", String("classic BT up, watching ") +
-                       (carMacIsPlaceholder ? "(placeholder MAC!)" : CAR_BT_MAC) +
+                       (carMacIsPlaceholder ? "(placeholder MAC!)" : TARGET_MAC) +
                        ", inquiry cycle " + String(INQ_LEN_UNITS * 1.28f, 2) + "s continuous");
     startInquiry();
   } else {
