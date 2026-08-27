@@ -1147,7 +1147,8 @@ static void radioStats(const char *why) {
                         (wifiPhase == WifiPhase::Off ? "off" : "on") +
                         " cycles=" + String(cyc) + " reports=" + String(reports) +
                         " car=" + String(carRep) + " best=" +
-                        (best > -127 ? String(best) + "dBm" : String("nothing heard")));
+                        (best > -127 ? String(best) + "dBm" : String("nothing heard")) +
+                        " temp=" + String((int)temperatureRead()) + "C");
 }
 
 static void setupOtaOnce() {
@@ -1501,6 +1502,9 @@ void loop() {
                        String(heap_caps_get_largest_free_block(MALLOC_CAP_8BIT) / 1024) +
                        "K wifi=" +
                        String(WiFi.status() == WL_CONNECTED ? WiFi.RSSI() : 0) +
+                       // die temp (internal sensor: offset unreliable, trend real)
+                       // — the board came back from the garage noticeably hot
+                       " temp=" + String((int)temperatureRead()) + "C" +
                        " http=" + String(http) + " wifidrop=" + String(wdrop) +
                        (afail ? " ALLOCFAIL=" + String(afail) + " last=" +
                                     String(allocFailLastSize.load()) + "b"
