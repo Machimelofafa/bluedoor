@@ -150,6 +150,17 @@ BT sighting ─▶ state machine ─▶ strict verdict ─▶ run-mode gate ─�
 
 ## Design notes
 
+- **Stability verdict (overnight soak, 2026-08-28):** continuous classic
+  inquiry + WiFi crashes the prebuilt BT controller every 1–3.5 h — a
+  controller assert (`ASSERT_PARAM rwbt.c:393`) and repeated int-wdt stalls
+  inside its level-4 interrupt (`hli_vectors.S`), with the app loop innocent
+  every time (heap 28–32 K min, temp flat, http=0). Desk conditions (strong
+  WiFi, cool, clean power) reproduced it, ruling out environment. Retiring
+  continuous inquiry is the fix; the BLE build does exactly that. Note: the
+  classic-RAM release is NOT possible on Arduino 2.0.17's prebuilt BTDM libs
+  (`esp_bt_controller_init` rejects both a BLE cfg.mode and a post-release
+  default cfg), so the BLE build runs the controller dual-mode with classic
+  simply unused.
 - Classic BT (BR/EDR) inquiry via ESP-IDF GAP, RSSI from
   `ESP_BT_GAP_DISC_RES_EVT`, continuous cycles. BLE is useless here — the car
   is classic-only (Phase 0).

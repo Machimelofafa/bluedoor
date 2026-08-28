@@ -427,18 +427,31 @@ static void bleGapCallback(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param_t 
   }
 }
 
+// a failed step logs its name and code — "BT init failed" alone cost a
+// debugging round trip on first hardware contact (boot #38)
+static bool btStep(const char *what, esp_err_t e) {
+  if (e == ESP_OK) return true;
+  logEvent("ERR", String(what) + ": " + esp_err_to_name(e));
+  return false;
+}
+
 static bool initBt() {
-  // BLE-only: hand the classic BT controller's RAM back (tens of KB on a heap
-  // that idles near 38 KB) — the car's classic radio is no longer watched.
-  esp_bt_controller_mem_release(ESP_BT_MODE_CLASSIC_BT);
-  esp_bt_controller_config_t cfg = BT_CONTROLLER_INIT_CONFIG_DEFAULT();
-  cfg.mode = ESP_BT_MODE_BLE;
-  if (esp_bt_controller_init(&cfg) != ESP_OK) return false;
-  if (esp_bt_controller_enable(ESP_BT_MODE_BLE) != ESP_OK) return false;
-  if (esp_bluedroid_init() != ESP_OK) return false;
-  if (esp_bluedroid_enable() != ESP_OK) return false;
-  if (esp_ble_gap_register_callback(bleGapCallback) != ESP_OK) return false;
-  return esp_ble_gap_set_scan_params(&bleScanParams) == ESP_OK;   // starts the scan
+  // The hoped-for classic-RAM release is not achievable on Arduino's prebuilt
+  // BTDM libs: esp_bt_controller_init rejects both a BLE cfg.mode (must equal
+  // the compiled mode, boot #38) and the default cfg after mem_release(CLASSIC)
+  // (its memory check, boot #39). So run the controller dual-mode via btStart()
+  // like the classic build and simply never touch classic — the overnight soak
+  // pinned the crashes on continuous inquiry (rwbt.c assert, hli_vectors int-wdt
+  // stalls), not on the classic stack existing.
+  if (!btStart()) {
+    logEvent("ERR", "btStart failed");
+    return false;
+  }
+  if (!btStep("bluedroid_init", esp_bluedroid_init())) return false;
+  if (!btStep("bluedroid_enable", esp_bluedroid_enable())) return false;
+  if (!btStep("gap_register", esp_ble_gap_register_callback(bleGapCallback))) return false;
+  // starts the scan (the callback chains param-set completion into scanning)
+  return btStep("set_scan_params", esp_ble_gap_set_scan_params(&bleScanParams));
 }
 #else
 static bool initBt() {
@@ -1411,9 +1424,15 @@ void setup() {
   wifiPhaseSinceMs = lastRadioStatsMs = millis();
 
   if (initBt()) {
+#if DETECT_BLE
+    logEvent("BT", String("BLE scan up, watching beacon ") +
+                       (carMacIsPlaceholder ? "(placeholder MAC — survey only)" : TARGET_MAC) +
+                       ", continuous passive scan");
+#else
     logEvent("BT", String("classic BT up, watching ") +
                        (carMacIsPlaceholder ? "(placeholder MAC!)" : TARGET_MAC) +
                        ", inquiry cycle " + String(INQ_LEN_UNITS * 1.28f, 2) + "s continuous");
+#endif
     startInquiry();
   } else {
     logEvent("ERR", "BT init failed — logger is blind! check build/config");
