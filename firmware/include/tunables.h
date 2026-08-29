@@ -90,12 +90,15 @@
 // know its address beforehand (phones rotate theirs; give the phone advertiser
 // a local name to make the trail self-identifying). This firmware deliberately
 // records every address it hears while the census is on; set to 0 once
-// BEACON_BLE_MAC is commissioned.
+// BEACON_BLE_MAC is commissioned. The env:survey build extends the census to
+// classic inquiry responses (lines tagged BT vs BLE) for drive-through tests.
 #define BLE_SURVEY             1
-// 20 s buckets: fine enough to see the ramp approach shape. Worst-case log
-// churn (~0.5 KB/min with a few devices) recycles the 2x48 KB flash log in a
-// day-plus, which is fine while capture.sh keeps the full serial history.
-#define BLE_SURVEY_MS          (20u * 1000u)
+// 5 s buckets: the whole arrival is fast (~3 s ramp descent + 4-10 s waiting
+// at the door), so drive-through tests need street / descent / door-wait in
+// separate buckets or the gradient smears into one line. Costs ~4x the log
+// churn of the earlier 20 s setting — acceptable for the attended survey
+// build; widen it again if a census build ever runs unattended for days.
+#define BLE_SURVEY_MS          (5u * 1000u)
 // Census table: max distinct addresses per interval; extras are counted and
 // logged as one overflow line, strongest stay in the table.
 #define BLE_SURVEY_SLOTS       12

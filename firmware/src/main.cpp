@@ -64,6 +64,16 @@
 #ifndef DETECT_BLE
 #define DETECT_BLE 0
 #endif
+// env:survey only — classic inquiry running alongside the BLE scan so the
+// census hears everything (car head unit is classic; phones are BLE). This is
+// the coex config the stability hunt convicted (rwbt.c asserts under
+// inquiry+WiFi), so it is for attended test sessions, never the long-term build.
+#ifndef SURVEY_CLASSIC
+#define SURVEY_CLASSIC 0
+#endif
+#if SURVEY_CLASSIC && !DETECT_BLE
+#error "SURVEY_CLASSIC extends the BLE census; build it with DETECT_BLE=1"
+#endif
 #if DETECT_BLE
 #include "esp_gap_ble_api.h"
 #ifndef BEACON_BLE_MAC          // add the real one to config.h once you own it
@@ -263,6 +273,9 @@ static uint32_t radCycles = 0;   // loop context only
 enum class ScanMode : uint8_t { Idle, Inquiry, Probe };
 static ScanMode scanMode = ScanMode::Idle;
 static uint32_t probeStartMs = 0, lastProbeMs = 0, lastInqDoneMs = 0;
+#if SURVEY_CLASSIC
+static uint32_t lastClassicDoneMs = 0;   // classic sweep liveness (survey builds)
+#endif
 static uint32_t inqCycles = 0;
 static bool otaActive = false;
 
@@ -273,6 +286,84 @@ static bool parseMac(const char *s, esp_bd_addr_t out) {
   for (int i = 0; i < 6; i++) out[i] = (uint8_t)b[i];
   return true;
 }
+
+#if DETECT_BLE && BLE_SURVEY
+// Commissioning census: everything heard, per interval — so a range test needs
+// no address known up front (and no reflash): drive up with any advertiser and
+// read its RSSI trail out of the log afterwards. first/last bracket the
+// interval, so a rising first->last is an approach in progress. Deliberately
+// records every address heard; opt out (BLE_SURVEY 0) once BEACON_BLE_MAC is
+// commissioned. (Phones randomise their BLE address — identify them by the
+// advertised name, or by which trail moves.) SURVEY_CLASSIC builds feed classic
+// inquiry responses into the same table, flagged so the log says which radio.
+struct SurveyDev {
+  uint8_t bda[6];
+  bool classic;
+  uint16_t count;
+  int8_t first, best, last;
+  char name[16];
+};
+static portMUX_TYPE surveyMux = portMUX_INITIALIZER_UNLOCKED;
+static SurveyDev surveyTab[BLE_SURVEY_SLOTS];
+static uint8_t surveyUsed = 0;
+static uint16_t surveyOverflow = 0;
+static uint32_t lastSurveyMs = 0;
+
+// Known fixtures (the TV, ...) dropped before they cost a table slot or a log
+// line. Addresses live in config.h (SURVEY_IGNORE_MACS, comma-separated) —
+// home-identifying, so gitignored like the rest of that file.
+#ifndef SURVEY_IGNORE_MACS
+#define SURVEY_IGNORE_MACS ""
+#endif
+#define SURVEY_IGNORE_MAX 4
+static uint8_t surveyIgnore[SURVEY_IGNORE_MAX][6];
+static uint8_t surveyIgnoreCount = 0;
+
+static void surveyIgnoreInit() {
+  char buf[] = SURVEY_IGNORE_MACS;
+  char *save = nullptr;
+  for (char *tok = strtok_r(buf, ", ", &save); tok; tok = strtok_r(nullptr, ", ", &save)) {
+    if (surveyIgnoreCount >= SURVEY_IGNORE_MAX) {
+      logEvent("ERR", "SURVEY_IGNORE_MACS: only first " + String(SURVEY_IGNORE_MAX) + " used");
+      break;
+    }
+    if (parseMac(tok, surveyIgnore[surveyIgnoreCount]))
+      surveyIgnoreCount++;
+    else
+      logEvent("ERR", String("SURVEY_IGNORE_MACS: cannot parse '") + tok + "'");
+  }
+  if (surveyIgnoreCount)
+    logEvent("CONF", String(surveyIgnoreCount) + " address(es) census-ignored");
+}
+
+// BT stack task context (both GAP callbacks land here)
+static void surveyRecord(const uint8_t *bda, bool classic, int8_t rssi, const char *name) {
+  for (uint8_t i = 0; i < surveyIgnoreCount; i++)
+    if (memcmp(surveyIgnore[i], bda, 6) == 0) return;
+  portENTER_CRITICAL(&surveyMux);
+  uint8_t i = 0;
+  while (i < surveyUsed &&
+         !(surveyTab[i].classic == classic && memcmp(surveyTab[i].bda, bda, 6) == 0))
+    i++;
+  if (i < surveyUsed) {
+    surveyTab[i].count++;
+    surveyTab[i].last = rssi;
+    if (rssi > surveyTab[i].best) surveyTab[i].best = rssi;
+    if (!surveyTab[i].name[0] && name[0])
+      strlcpy(surveyTab[i].name, name, sizeof(surveyTab[i].name));
+  } else if (surveyUsed < BLE_SURVEY_SLOTS) {
+    SurveyDev &d = surveyTab[surveyUsed++];
+    memcpy(d.bda, bda, 6);
+    d.classic = classic;
+    d.count = 1;
+    d.first = d.best = d.last = rssi;
+    strlcpy(d.name, name, sizeof(d.name));
+  } else {
+    surveyOverflow++;
+  }
+  portEXIT_CRITICAL(&surveyMux);
+}
+#endif  // DETECT_BLE && BLE_SURVEY
 
 static void gapCallback(esp_bt_gap_cb_event_t event, esp_bt_gap_cb_param_t *param) {
   switch (event) {
@@ -303,6 +394,11 @@ static void gapCallback(esp_bt_gap_cb_event_t event, esp_bt_gap_cb_param_t *para
       }
       radReports++;
       if (hasRssi && rssi > radBestRssi) radBestRssi = rssi;
+#if DETECT_BLE && BLE_SURVEY && SURVEY_CLASSIC
+      // name-discovery results arrive here without an RSSI prop; census wants
+      // signal samples only
+      if (hasRssi) surveyRecord(param->disc_res.bda, true, rssi, name);
+#endif
       if (memcmp(param->disc_res.bda, carAddr, 6) == 0) {
         radCarReports++;
         // GAP delivers name-discovery results here too, without an RSSI prop;
@@ -371,27 +467,6 @@ static esp_ble_scan_params_t bleScanParams = {
     .scan_duplicate = BLE_SCAN_DUPLICATE_DISABLE,
 };
 
-#if BLE_SURVEY
-// Commissioning census: everything heard, per interval — so a range test needs
-// no address known up front (and no reflash): drive up with any advertiser and
-// read its RSSI trail out of the log afterwards. first/last bracket the
-// interval, so a rising first->last is an approach in progress. Deliberately
-// records every address heard; opt out (BLE_SURVEY 0) once BEACON_BLE_MAC is
-// commissioned. (Phones randomise their BLE address — identify them by the
-// advertised name, or by which trail moves.)
-struct SurveyDev {
-  uint8_t bda[6];
-  uint16_t count;
-  int8_t first, best, last;
-  char name[16];
-};
-static portMUX_TYPE surveyMux = portMUX_INITIALIZER_UNLOCKED;
-static SurveyDev surveyTab[BLE_SURVEY_SLOTS];
-static uint8_t surveyUsed = 0;
-static uint16_t surveyOverflow = 0;
-static uint32_t lastSurveyMs = 0;
-#endif
-
 static void bleGapCallback(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param_t *param) {
   switch (event) {
     case ESP_GAP_BLE_SCAN_PARAM_SET_COMPLETE_EVT:
@@ -420,27 +495,7 @@ static void bleGapCallback(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param_t 
         if (rssi > otherBestRssi) otherBestRssi = rssi;
       }
 #if BLE_SURVEY
-      portENTER_CRITICAL(&surveyMux);
-      {
-        uint8_t i = 0;
-        while (i < surveyUsed && memcmp(surveyTab[i].bda, param->scan_rst.bda, 6) != 0) i++;
-        if (i < surveyUsed) {
-          surveyTab[i].count++;
-          surveyTab[i].last = rssi;
-          if (rssi > surveyTab[i].best) surveyTab[i].best = rssi;
-          if (!surveyTab[i].name[0] && name[0])
-            strlcpy(surveyTab[i].name, name, sizeof(surveyTab[i].name));
-        } else if (surveyUsed < BLE_SURVEY_SLOTS) {
-          SurveyDev &d = surveyTab[surveyUsed++];
-          memcpy(d.bda, param->scan_rst.bda, 6);
-          d.count = 1;
-          d.first = d.best = d.last = rssi;
-          strlcpy(d.name, name, sizeof(d.name));
-        } else {
-          surveyOverflow++;
-        }
-      }
-      portEXIT_CRITICAL(&surveyMux);
+      surveyRecord(param->scan_rst.bda, false, rssi, name);
 #endif
       break;
     }
@@ -458,6 +513,9 @@ static bool btStep(const char *what, esp_err_t e) {
 }
 
 static bool initBt() {
+#if BLE_SURVEY
+  surveyIgnoreInit();   // before any callback can hear the first advertisement
+#endif
   // The hoped-for classic-RAM release is not achievable on Arduino's prebuilt
   // BTDM libs: esp_bt_controller_init rejects both a BLE cfg.mode (must equal
   // the compiled mode, boot #38) and the default cfg after mem_release(CLASSIC)
@@ -471,6 +529,16 @@ static bool initBt() {
   }
   if (!btStep("bluedroid_init", esp_bluedroid_init())) return false;
   if (!btStep("bluedroid_enable", esp_bluedroid_enable())) return false;
+#if SURVEY_CLASSIC
+  // census across both radios: classic inquiry sweeps alongside the BLE scan
+  // (scanner only — stay invisible and unconnectable ourselves)
+  if (!btStep("classic_gap_register", esp_bt_gap_register_callback(gapCallback))) return false;
+  esp_bt_gap_set_scan_mode(ESP_BT_NON_CONNECTABLE, ESP_BT_NON_DISCOVERABLE);
+  if (!btStep("classic_inquiry",
+              esp_bt_gap_start_discovery(ESP_BT_INQ_MODE_GENERAL_INQUIRY, INQ_LEN_UNITS, 0)))
+    return false;
+  lastClassicDoneMs = millis();
+#endif
   if (!btStep("gap_register", esp_ble_gap_register_callback(bleGapCallback))) return false;
   // starts the scan (the callback chains param-set completion into scanning)
   return btStep("set_scan_params", esp_ble_gap_set_scan_params(&bleScanParams));
@@ -797,6 +865,17 @@ static void scanTick() {
     radCycles++;
     startInquiry();
   }
+#if SURVEY_CLASSIC
+  // Sweeps complete every ~INQ_LEN_UNITS*1.28 s; silence this long means the
+  // restart chain broke (OTA pause, stalled controller) — kick it here.
+  if (now - lastClassicDoneMs >= 30u * 1000u) {
+    lastClassicDoneMs = now;
+    esp_err_t e =
+        esp_bt_gap_start_discovery(ESP_BT_INQ_MODE_GENERAL_INQUIRY, INQ_LEN_UNITS, 0);
+    if (e != ESP_OK)
+      logEvent("ERR", "classic inquiry watchdog restart: " + String(esp_err_to_name(e)));
+  }
+#endif
 #if BLE_SURVEY
   if (now - lastSurveyMs >= BLE_SURVEY_MS) {
     lastSurveyMs = now;
@@ -813,10 +892,11 @@ static void scanTick() {
     portEXIT_CRITICAL(&surveyMux);
     for (uint8_t i = 0; i < used; i++) {
       char line[120];
-      snprintf(line, sizeof(line), "%02X:%02X:%02X:%02X:%02X:%02X n=%u first %d best %d last %d",
-               snap[i].bda[0], snap[i].bda[1], snap[i].bda[2], snap[i].bda[3], snap[i].bda[4],
-               snap[i].bda[5], (unsigned)snap[i].count, (int)snap[i].first, (int)snap[i].best,
-               (int)snap[i].last);
+      snprintf(line, sizeof(line),
+               "%s %02X:%02X:%02X:%02X:%02X:%02X n=%u first %d best %d last %d",
+               snap[i].classic ? "BT " : "BLE", snap[i].bda[0], snap[i].bda[1], snap[i].bda[2],
+               snap[i].bda[3], snap[i].bda[4], snap[i].bda[5], (unsigned)snap[i].count,
+               (int)snap[i].first, (int)snap[i].best, (int)snap[i].last);
       logEvent("SURVEY", String(line) + (snap[i].name[0] ? String(" '") + snap[i].name + "'"
                                                          : String("")));
     }
@@ -847,6 +927,22 @@ static void scanTick() {
 }
 #endif  // DETECT_BLE
 
+#if DETECT_BLE
+// Only fires in SURVEY_CLASSIC builds: a classic inquiry sweep completed.
+// Restart it directly — no probes, no scanMode: those belong to the BLE scan,
+// which runs continuously and independently. lastInqDoneMs stays untouched too;
+// it paces the BLE scan-restart watchdog in scanTick.
+static void onInquiryDone() {
+#if SURVEY_CLASSIC
+  inqCycles++;
+  lastClassicDoneMs = millis();
+  if (otaActive) return;
+  esp_err_t e =
+      esp_bt_gap_start_discovery(ESP_BT_INQ_MODE_GENERAL_INQUIRY, INQ_LEN_UNITS, 0);
+  if (e != ESP_OK) logEvent("ERR", "classic inquiry restart: " + String(esp_err_to_name(e)));
+#endif
+}
+#else
 static void onInquiryDone() {
   uint32_t now = millis();
   inqCycles++;
@@ -870,6 +966,7 @@ static void onInquiryDone() {
     startInquiry();
   }
 }
+#endif  // DETECT_BLE
 
 // -------------------------------------------------------------------- web
 

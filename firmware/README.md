@@ -1,13 +1,16 @@
 # Bluedoor firmware
 
-One codebase ([src/main.cpp](src/main.cpp)), two build targets
+One scanner codebase ([src/main.cpp](src/main.cpp)) plus a tiny in-car
+advertiser ([src/beacon.cpp](src/beacon.cpp)), five build targets
 ([platformio.ini](platformio.ini)):
 
 | Target | What it is | Output |
 |---|---|---|
 | `logger` | **Phase 0.5** one-week "would-open" logger. Full arrival pipeline from [PLAN.md](../PLAN.md), but the only output is the log — no GPIO is ever driven, nothing is wired. | verdicts in the log only |
 | `v1` | **Production.** Same pipeline; a strict arrival verdict can additionally pulse GPIO 26 → PC817 optocoupler → the sacrificial remote's button ([COMPONENTS.md](../COMPONENTS.md) wiring). | log + real button press |
-| `logger-ble` | Same logger, but the radio layer watches a **BLE beacon carried in the car** instead of the car's own head unit. Needs `BEACON_BLE_MAC` in config.h. | verdicts in the log only |
+| `logger-ble` | Same logger, but the radio layer watches a **BLE beacon carried in the car** instead of the car's own head unit. Needs `BEACON_BLE_MAC` in config.h; until it's filled in, the `SURVEY` census still logs everything heard. | verdicts in the log only |
+| `survey` | `logger-ble` plus classic inquiry: the census hears both radios at once, for attended drive-through tests. Runs the coex mix that crashes the controller (see design notes) — **never leave it running unattended**; reflash `logger-ble` after each session. | census in the log |
+| `beacon` | **The second ESP32, carried in the car.** Advertises its burned-in MAC + name every 100 ms at +9 dBm, non-connectable. No WiFi, no OTA, no flash writes — car USB power cuts ~10–15 s after ignition off, so nothing may depend on a clean shutdown. | BLE advertising + serial MAC printout |
 
 ### Why `logger-ble` exists (Phase 0.5 result, 2026-08-27)
 
@@ -25,10 +28,18 @@ The car's own Bluetooth cannot drive arrival detection, and no tuning fixes it:
   inversion. The `REFUSE` guard at −60 dBm never fired and, at these levels,
   never can.
 
-A beacon replaces it with a strong, always-advertising, fixed-address signal
-the existing ramp logic can use — and because a beacon stays visible while the
-car is home, "away ≥ 10 min" becomes meaningful and wake-in-place stops being
-a special case.
+A beacon replaces it with a strong, fixed-address signal the existing ramp
+logic can use. The beacon rides the car's **switched USB** (measured
+2026-08-29: ~10–15 s of grace after ignition off, brief re-power while a door
+is open), so a parked car is a *silent* beacon: "away ≥ 10 min" arms whether
+the car is gone or garaged, and the wake-in-place refusal's remaining job is
+the door-open blip — someone rummaging in the parked car powers the beacon
+for ~10–20 s of strong flat signal, which must be refused (retune
+`WAKE_STRONG_DBM` from −60 to ≈−85 for beacon levels). The 2026-08-29
+phone-in-car drive test also pinned the car body at **~20 dB** and showed an
+in-car transmitter at phone power never crosses the −80 trigger: plan
+`RSSI_TRIGGER_DBM` ≈ −90 for the beacon, which at +9 dBm should read ≈ −84
+(garage) / −77..−80 (door) / marginal at street range.
 
 Board: Freenove ESP32-WROOM (FNK0090).
 
@@ -145,6 +156,7 @@ BT sighting ─▶ state machine ─▶ strict verdict ─▶ run-mode gate ─�
 | `STATE` | DISARMED(boot/seen/lockout) ↔ ARMED transitions with reasons. |
 | `HB` | 30-min heartbeat (liveness); gap = crash/power loss. Includes `big=` (largest free block) — allocation failures are about fragmentation, which free heap alone hides — plus `http=` (web requests served this interval), `wifidrop=` (WiFi disconnects this interval), and `ALLOCFAIL=` (cumulative failed mallocs with the last requested size — should never appear). |
 | `RADIO` | 5-min census of what the inquiry radio actually heard: completed cycles, every device report (car and anonymous neighbours), and the best RSSI of anything. Reads a quiet log as "heard nothing" rather than "was not listening". Also marks the WiFi/BT coexistence test windows (`WIFI_DUTY_TEST` in tunables.h): WiFi alternates 10 min up / 20 min quiet, so the two can be compared inside one run. Every boot starts with WiFi up, so OTA is always reachable within 10 min of a reset. |
+| `SURVEY` | BLE-build census (`BLE_SURVEY` in tunables.h): every 20 s, one line per distinct advertiser heard that interval — `BT `/`BLE` radio tag (classic only in the `survey` env), sighting count, first/best/last RSSI, and the advertised name when one is in the advertising packet (the scan is passive, so names sent only in scan responses never appear). A rising first→last across consecutive lines is an approach in progress. Known fixtures are dropped via `SURVEY_IGNORE_MACS` in config.h. |
 | `MARK` | Your ground-truth annotations. |
 | `ERR` | Init problems, watchdog restarts, refused control attempts (with source IP). Boot-time crash forensics also land here: the `BOOT` line's reset reason distinguishes `int-wdt` (ISR/critical-section stall >300ms — the classic WiFi+BT coexistence signature) from `task-wdt` (IDLE0 starved >5s) and `rtc-wdt`; a task-wdt reset additionally logs its RTC-RAM breadcrumb and an abort message, so a watchdog reset with *neither* points at the int-wdt/coex path. |
 

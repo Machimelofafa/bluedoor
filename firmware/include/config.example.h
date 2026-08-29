@@ -14,6 +14,10 @@
 // Fill this in once the real beacon exists; only the would-open state machine
 // uses it.
 #define BEACON_BLE_MAC  "AA:BB:CC:DD:EE:FF"
+// Census hygiene: known fixed advertisers (the TV, ...) dropped from the SURVEY
+// census before they cost a table slot or a log line. Comma-separated MACs,
+// "" = keep everything. First 4 entries used.
+#define SURVEY_IGNORE_MACS  ""
 
 // Password for over-the-air reflashing (pio run -t upload --upload-port bluedoor.local).
 // Blank or left as this placeholder = OTA stays disabled (USB reflash only).
