@@ -372,15 +372,23 @@ static esp_ble_scan_params_t bleScanParams = {
 };
 
 #if BLE_SURVEY
-// Commissioning aid: the beacon's address is unknown until you own one, so log
-// the strongest advertiser seen each interval — hold the beacon against the box
-// and its MAC appears in the log. This is the ONE place this firmware records
-// somebody else's address, so it is deliberate and opt-out: set BLE_SURVEY to 0
-// once BEACON_BLE_MAC is in config.h. (Phones randomise their BLE address.)
+// Commissioning census: everything heard, per interval — so a range test needs
+// no address known up front (and no reflash): drive up with any advertiser and
+// read its RSSI trail out of the log afterwards. first/last bracket the
+// interval, so a rising first->last is an approach in progress. Deliberately
+// records every address heard; opt out (BLE_SURVEY 0) once BEACON_BLE_MAC is
+// commissioned. (Phones randomise their BLE address — identify them by the
+// advertised name, or by which trail moves.)
+struct SurveyDev {
+  uint8_t bda[6];
+  uint16_t count;
+  int8_t first, best, last;
+  char name[16];
+};
 static portMUX_TYPE surveyMux = portMUX_INITIALIZER_UNLOCKED;
-static uint8_t surveyBda[6];
-static int surveyRssi = -127;
-static char surveyName[32];
+static SurveyDev surveyTab[BLE_SURVEY_SLOTS];
+static uint8_t surveyUsed = 0;
+static uint16_t surveyOverflow = 0;
 static uint32_t lastSurveyMs = 0;
 #endif
 
@@ -413,10 +421,24 @@ static void bleGapCallback(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param_t 
       }
 #if BLE_SURVEY
       portENTER_CRITICAL(&surveyMux);
-      if (rssi > surveyRssi) {
-        surveyRssi = rssi;
-        memcpy(surveyBda, param->scan_rst.bda, 6);
-        strlcpy(surveyName, name, sizeof(surveyName));
+      {
+        uint8_t i = 0;
+        while (i < surveyUsed && memcmp(surveyTab[i].bda, param->scan_rst.bda, 6) != 0) i++;
+        if (i < surveyUsed) {
+          surveyTab[i].count++;
+          surveyTab[i].last = rssi;
+          if (rssi > surveyTab[i].best) surveyTab[i].best = rssi;
+          if (!surveyTab[i].name[0] && name[0])
+            strlcpy(surveyTab[i].name, name, sizeof(surveyTab[i].name));
+        } else if (surveyUsed < BLE_SURVEY_SLOTS) {
+          SurveyDev &d = surveyTab[surveyUsed++];
+          memcpy(d.bda, param->scan_rst.bda, 6);
+          d.count = 1;
+          d.first = d.best = d.last = rssi;
+          strlcpy(d.name, name, sizeof(d.name));
+        } else {
+          surveyOverflow++;
+        }
       }
       portEXIT_CRITICAL(&surveyMux);
 #endif
@@ -778,22 +800,29 @@ static void scanTick() {
 #if BLE_SURVEY
   if (now - lastSurveyMs >= BLE_SURVEY_MS) {
     lastSurveyMs = now;
-    uint8_t b[6];
-    int r;
-    char n[32];
+    // snapshot + reset under the lock; logEvent (Serial + flash) stays outside
+    SurveyDev snap[BLE_SURVEY_SLOTS];
+    uint8_t used;
+    uint16_t dropped;
     portENTER_CRITICAL(&surveyMux);
-    memcpy(b, surveyBda, 6);
-    r = surveyRssi;
-    strlcpy(n, surveyName, sizeof(n));
-    surveyRssi = -127;
+    used = surveyUsed;
+    dropped = surveyOverflow;
+    memcpy(snap, surveyTab, sizeof(SurveyDev) * used);
+    surveyUsed = 0;
+    surveyOverflow = 0;
     portEXIT_CRITICAL(&surveyMux);
-    if (r > -127) {
-      char mac[18];
-      snprintf(mac, sizeof(mac), "%02X:%02X:%02X:%02X:%02X:%02X", b[0], b[1], b[2], b[3],
-               b[4], b[5]);
-      logEvent("SURVEY", String("strongest BLE advertiser: ") + mac + " rssi " + String(r) +
-                             (n[0] ? String(" '") + n + "'" : String("")));
+    for (uint8_t i = 0; i < used; i++) {
+      char line[120];
+      snprintf(line, sizeof(line), "%02X:%02X:%02X:%02X:%02X:%02X n=%u first %d best %d last %d",
+               snap[i].bda[0], snap[i].bda[1], snap[i].bda[2], snap[i].bda[3], snap[i].bda[4],
+               snap[i].bda[5], (unsigned)snap[i].count, (int)snap[i].first, (int)snap[i].best,
+               (int)snap[i].last);
+      logEvent("SURVEY", String(line) + (snap[i].name[0] ? String(" '") + snap[i].name + "'"
+                                                         : String("")));
     }
+    if (dropped)
+      logEvent("SURVEY", String(dropped) + " reports beyond " + String(BLE_SURVEY_SLOTS) +
+                             "-address table dropped this interval");
   }
 #endif
 }

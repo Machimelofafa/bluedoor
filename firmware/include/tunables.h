@@ -83,11 +83,21 @@
 #define WIFI_TEST_OFF_MS       (20u * 60u * 1000u)
 
 // ---- BLE beacon mode (DETECT_BLE=1 builds, see platformio.ini env logger-ble) ----
-// Commissioning survey: logs the strongest BLE advertiser's address once a
-// minute so a beacon held against the box identifies itself. Set to 0 once
-// BEACON_BLE_MAC is filled in — it is the only place this firmware records
-// an address that is not the target's.
+// Commissioning census: every BLE_SURVEY_MS, one SURVEY line per advertiser
+// heard that interval (count + first/best/last RSSI + name). In this RF-quiet
+// spot that is a handful of lines, and it makes range tests reflash-free: drive
+// up with any advertiser and read its RSSI trail out of the log — no need to
+// know its address beforehand (phones rotate theirs; give the phone advertiser
+// a local name to make the trail self-identifying). This firmware deliberately
+// records every address it hears while the census is on; set to 0 once
+// BEACON_BLE_MAC is commissioned.
 #define BLE_SURVEY             1
-#define BLE_SURVEY_MS          (60u * 1000u)
+// 20 s buckets: fine enough to see the ramp approach shape. Worst-case log
+// churn (~0.5 KB/min with a few devices) recycles the 2x48 KB flash log in a
+// day-plus, which is fine while capture.sh keeps the full serial history.
+#define BLE_SURVEY_MS          (20u * 1000u)
+// Census table: max distinct addresses per interval; extras are counted and
+// logged as one overflow line, strongest stay in the table.
+#define BLE_SURVEY_SLOTS       12
 // BLE scanning runs continuously; restart it this often as a liveness watchdog.
 #define BLE_SCAN_RESTART_MS    (5u * 60u * 1000u)

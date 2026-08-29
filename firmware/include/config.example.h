@@ -9,8 +9,10 @@
 // The car head unit's classic BT MAC ("Uconnect"), from Phase 0.
 #define CAR_BT_MAC      "AA:BB:CC:DD:EE:FF"
 // logger-ble builds watch this instead: the BLE beacon carried in the car.
-// BLE_SURVEY in tunables.h logs the strongest advertiser once a minute — hold
-// the beacon against the box and read its address out of the log.
+// Not needed for range tests — BLE_SURVEY in tunables.h logs every advertiser
+// heard (RSSI trail included), so any beacon identifies itself in the log.
+// Fill this in once the real beacon exists; only the would-open state machine
+// uses it.
 #define BEACON_BLE_MAC  "AA:BB:CC:DD:EE:FF"
 
 // Password for over-the-air reflashing (pio run -t upload --upload-port bluedoor.local).
