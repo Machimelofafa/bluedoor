@@ -160,7 +160,10 @@ BT sighting ─▶ state machine ─▶ strict verdict ─▶ run-mode gate ─�
   classic-RAM release is NOT possible on Arduino 2.0.17's prebuilt BTDM libs
   (`esp_bt_controller_init` rejects both a BLE cfg.mode and a post-release
   default cfg), so the BLE build runs the controller dual-mode with classic
-  simply unused.
+  simply unused. **Confirmed 2026-08-29: the BLE build ran 25 h clean under
+  identical desk conditions** (vs. 4 crashes in 9.5 h for classic), heap
+  fragmentation flat (`big=` 27 K throughout, vs. 18–19 K on classic) —
+  retiring inquiry fixed it.
 - Classic BT (BR/EDR) inquiry via ESP-IDF GAP, RSSI from
   `ESP_BT_GAP_DISC_RES_EVT`, continuous cycles. BLE is useless here — the car
   is classic-only (Phase 0).
