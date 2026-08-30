@@ -1036,8 +1036,8 @@ static void handleRoot() {
 #endif
 
   if (carMacIsPlaceholder)
-    h += F("<p class=fired>⚠ config.h still has the placeholder car MAC — "
-           "this build can never see the car!</p>");
+    h += F("<p class=fired>⚠ config.h still has the placeholder " TARGET_KIND
+           " MAC — this build can never see the " TARGET_KIND "!</p>");
   if (!otaPasswordUsable())
     h += F("<p class=fired>⚠ OTA_PASSWORD is blank or the placeholder — OTA is "
            "disabled until config.h gets a real one (USB reflash only).</p>");
@@ -1059,7 +1059,7 @@ static void handleRoot() {
   h += "<tr><td>relaxed rule would have fired</td><td>" + String(relaxedCount) + "</td></tr>";
   h += "<tr><td>wake-in-place refusals</td><td>" + String(refusalCount) + "</td></tr>";
   h += "<tr><td>last verdict</td><td>" + htmlEscape(lastVerdict) + "</td></tr>";
-  h += "<tr><td>car last sighted</td><td>";
+  h += "<tr><td>" TARGET_KIND " last sighted</td><td>";
   if (lastSightMs == 0 && lastSightRssi == 127) {
     h += "never (this boot)";
   } else {
@@ -1069,7 +1069,7 @@ static void handleRoot() {
   h += "</td></tr>";
   h += "<tr><td>sightings (this boot)</td><td>" + String(totalSightings);
   if (uint32_t noR = carNoRssiReports.load())
-    h += " (+" + String((unsigned)noR) + " car reports w/o RSSI, ignored)";
+    h += " (+" + String((unsigned)noR) + " " TARGET_KIND " reports w/o RSSI, ignored)";
   h += "</td></tr>";
   h += "<tr><td>page probe</td><td>";
   if (!probeEverRan) h += "not run yet";
