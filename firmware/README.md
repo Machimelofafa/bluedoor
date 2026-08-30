@@ -10,7 +10,7 @@ advertiser ([src/beacon.cpp](src/beacon.cpp)), five build targets
 | `v1` | **Production.** Same pipeline; a strict arrival verdict can additionally pulse GPIO 26 → PC817 optocoupler → the sacrificial remote's button ([COMPONENTS.md](../COMPONENTS.md) wiring). | log + real button press |
 | `logger-ble` | Same logger, but the radio layer watches a **BLE beacon carried in the car** instead of the car's own head unit. Needs `BEACON_BLE_MAC` in config.h; until it's filled in, the `SURVEY` census still logs everything heard. | verdicts in the log only |
 | `survey` | `logger-ble` plus classic inquiry: the census hears both radios at once, for attended drive-through tests. Runs the coex mix that crashes the controller (see design notes) — **never leave it running unattended**; reflash `logger-ble` after each session. | census in the log |
-| `beacon` | **The second ESP32, carried in the car.** Advertises its burned-in MAC + name every 100 ms at +9 dBm, non-connectable. No WiFi, no OTA, no flash writes — car USB power cuts ~10–15 s after ignition off, so nothing may depend on a clean shutdown. | BLE advertising + serial MAC printout |
+| `beacon` | **The second ESP32, carried in the car.** Advertises its burned-in MAC + name every 100 ms at +9 dBm, non-connectable. No WiFi, no OTA, no flash writes — car USB power cuts ~10–15 s after ignition off, so nothing may depend on a clean shutdown. | BLE advertising + serial MAC & TX-power printout |
 
 ### Why `logger-ble` exists (Phase 0.5 result, 2026-08-27)
 
@@ -34,14 +34,43 @@ logic can use. The beacon rides the car's **switched USB** (measured
 is open), so a parked car is a *silent* beacon: "away ≥ 10 min" arms whether
 the car is gone or garaged, and the wake-in-place refusal's remaining job is
 the door-open blip — someone rummaging in the parked car powers the beacon
-for ~10–20 s of strong flat signal, which must be refused (retune
-`WAKE_STRONG_DBM` from −60 to ≈−85 for beacon levels). The 2026-08-29
+for ~10–20 s of strong flat signal, which must be refused. The 2026-08-29
 phone-in-car drive test also pinned the car body at **~20 dB** and showed an
-in-car transmitter at phone power never crosses the −80 trigger: plan
-`RSSI_TRIGGER_DBM` ≈ −90 for the beacon, which at +9 dBm should read ≈ −84
-(garage) / −77..−80 (door) / marginal at street range.
+in-car transmitter at phone power never crosses the −80 trigger: at +9 dBm the
+beacon should read ≈ −84 (garage) / −77..−80 (door) / marginal at street range.
+
+So `RSSI_TRIGGER_DBM` and `WAKE_STRONG_DBM` now carry **two calibrations each**
+(`tunables.h`, switched on `DETECT_BLE`): −80/−60 for the classic radio,
+−90/−85 for the beacon. The two radios read ~10 dB apart at the same spot, and
+a single number cannot serve both — a −80 trigger simply never fires on a
+beacon that reads −84 in the garage. Both figures are still hypotheses until a
+beacon drive test replaces the phone's.
 
 Board: Freenove ESP32-WROOM (FNK0090).
+
+### Commissioning the beacon (2026-08-30)
+
+The second board is flashed and verified on the bench:
+
+- `pio run -e beacon -t upload` → the banner prints the burned-in BLE MAC;
+  that value goes in `BEACON_BLE_MAC` in config.h (gitignored, like every
+  other address here). A reflash never changes it.
+- The banner also prints the TX power **read back from the controller**
+  (`+9 dBm` confirmed) rather than the level it asked for — the whole link
+  budget rests on that one number, and a silently clamped radio would
+  otherwise look identical to a working one.
+- Heard by an independent scanner as `bluedoor-beacon`, −34 dBm across the
+  room. The name rides the advertising packet, not a scan response: the
+  advertising type is non-connectable, which cannot answer a scan request at
+  all, so the passive-scanning logger is guaranteed to see the name.
+- **1.0 s from reset to the first advertisement an outside scanner hears** —
+  the number that matters for the door-open blip, since car USB power comes
+  and goes. Measured with the board held in reset until the scanner was
+  already running (scan first, release reset, timestamp the first packet).
+
+Still open: the beacon has never been in the car. Street-range audibility at
++9 dBm is what decides whether the door can be fully open on arrival or only
+opening during the descent.
 
 ## Before flashing
 
@@ -135,7 +164,7 @@ BT sighting ─▶ state machine ─▶ strict verdict ─▶ run-mode gate ─�
 | # | Hypothesis | Where | Falsified if… |
 |---|---|---|---|
 | 1 | Strict ramp rule (≥3 sightings, ≥6 dB rise, crossing −80 dBm) catches every real arrival | `tunables.h` | logger week shows real arrivals with `RELAXED` but no strict `VERDICT` → relax ramp, lean on interlocks (PLAN.md) |
-| 2 | −80 dBm is the right proximity threshold from the chosen mounting spot | `RSSI_TRIGGER_DBM` | logged approach RSSI curves peak lower/higher |
+| 2 | −80 dBm (classic) / −90 dBm (beacon) is the right proximity threshold from the chosen mounting spot | `RSSI_TRIGGER_DBM` | logged approach RSSI curves peak lower/higher |
 | 3 | 250 ms reads as one clean button press on the MITTO 12V-UP | `PULSE_MS` | commissioning: door ignores it (lengthen) or double-triggers (shorten) |
 | 4 | 5.12 s inquiry cycles are fast enough to catch a driving approach | `INQ_LEN_UNITS` | arrivals appear as 1–2 sightings only → shorten cycles |
 | 5 | Lockout-until-full-away is an acceptable re-arm policy | state machine | legitimate same-hour second arrivals get eaten → add time-based cooldown path |

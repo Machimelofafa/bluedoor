@@ -6,8 +6,18 @@
 // ---- state machine ----
 // Absence required before arming (and before a sighting can count as arrival)
 #define AWAY_MIN_MS            (10u * 60u * 1000u)
-// "Near enough" RSSI threshold for a would-open (start ~-80 dBm, tune)
+// "Near enough" RSSI threshold for a would-open. Two calibrations, because the
+// two radios land ~10 dB apart at the same spot: the classic value was set for
+// the car head unit, the BLE one for the in-car beacon. Beacon figure from the
+// 2026-08-29 drive test (car body ~20 dB; a +1 dBm phone in the car topped out
+// at -79 from the window, so -80 could never fire); the beacon's +9 dBm should
+// read ~-84 in the garage, -77..-80 at the door. Identity comes from the fixed
+// MAC, so a loose threshold cannot let another device false-trigger.
+#if DETECT_BLE
+#define RSSI_TRIGGER_DBM       (-90)
+#else
 #define RSSI_TRIGGER_DBM       (-80)
+#endif
 // Strict arrival = approach signature: >= this many sightings ...
 #define APPROACH_MIN_SIGHTINGS 3
 // ... with total RSSI rise (max - first) of at least this many dB
@@ -17,8 +27,15 @@
 #define RELAXED_MIN_SIGHTINGS  2
 #define RELAXED_WINDOW_MS      (60u * 1000u)
 // Wake-in-place signature (logged as an explicit refusal): first sighting
-// already strong and the whole encounter flat
+// already strong and the whole encounter flat. On the beacon this is the
+// door-open blip — car USB re-powers for ~10-20 s when a door opens, so a
+// parked car briefly shouts; scaled with the trigger, since "strong" only
+// means anything relative to it.
+#if DETECT_BLE
+#define WAKE_STRONG_DBM        (-85)
+#else
 #define WAKE_STRONG_DBM        (-60)
+#endif
 #define WAKE_FLAT_DB           4
 // An encounter (sighting cluster while armed) ends without verdict after
 // this much quiet, or this much total lingering
