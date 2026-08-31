@@ -4,6 +4,11 @@ Companion to [PLAN.md](PLAN.md). Board: Freenove ESP32-WROOM (FNK0090),
 ordered 2026-08-22. **Build target: minimal v1 — ESP32 + old remote only, no
 door sensor** (decision 2026-08-22; reed interlock deferred to v2).
 
+**Visual build guide: [wiring-v1.html](wiring-v1.html)** — the same wiring drawn
+as named parts (no circuit symbols), plus PC817 leg identification, resistor
+stripe colours, the pad-polarity measurement, and the build order. Open it in a
+browser at the bench.
+
 ## Wiring map — v1
 
 ```

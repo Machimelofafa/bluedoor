@@ -1,0 +1,418 @@
+<title>Bluedoor v1 Wiring</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@600;700;800&family=Literata:opsz,wght@7..72,400;7..72,500;7..72,600&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+<style>
+:root{
+  --display:"Archivo","Helvetica Neue",Arial,sans-serif;
+  --body:"Literata",Georgia,"Times New Roman",serif;
+  --mono:"IBM Plex Mono",ui-monospace,"SFMono-Regular",Menlo,monospace;
+  --paper:#EFEDE8; --surface:#FBFAF7; --surface2:#E4E1D9; --chip:#26241F; --chip-ink:#EDE9DF;
+  --ink:#191814; --ink2:#5C574D; --rule:#D2CEC4;
+  --warm:#B8471A; --warm-soft:#F2E2D9;
+  --cool:#186B65; --cool-soft:#DAE9E7;
+  --danger:#9E2216; --danger-soft:#F4E0DC;
+  --metal:#B9B3A6;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --paper:#131311; --surface:#1C1C19; --surface2:#282823; --chip:#3B382F; --chip-ink:#EDE9DF;
+    --ink:#EDEAE2; --ink2:#9C978B; --rule:#37362F;
+    --warm:#E8783F; --warm-soft:#3A2418;
+    --cool:#4FB5AC; --cool-soft:#12302E;
+    --danger:#FF7263; --danger-soft:#3A1D18;
+    --metal:#75705F;
+  }
+}
+:root[data-theme="dark"]{
+  --paper:#131311; --surface:#1C1C19; --surface2:#282823; --chip:#3B382F; --chip-ink:#EDE9DF;
+  --ink:#EDEAE2; --ink2:#9C978B; --rule:#37362F;
+  --warm:#E8783F; --warm-soft:#3A2418;
+  --cool:#4FB5AC; --cool-soft:#12302E;
+  --danger:#FF7263; --danger-soft:#3A1D18;
+  --metal:#75705F;
+}
+body{background:var(--paper);color:var(--ink);font-family:var(--body);font-size:17px;line-height:1.6;
+  -webkit-font-smoothing:antialiased;}
+.wrap{max-width:1000px;margin:0 auto;padding:36px 22px 80px;display:flex;flex-direction:column;gap:44px;}
+.col{max-width:66ch;display:flex;flex-direction:column;gap:14px;}
+p{margin:0;}
+strong{font-weight:600;}
+h1{font-family:var(--display);font-weight:800;font-size:clamp(30px,6vw,46px);line-height:1.02;
+  letter-spacing:-.02em;margin:0;text-wrap:balance;}
+h2{font-family:var(--display);font-weight:700;font-size:clamp(21px,3.4vw,27px);line-height:1.15;
+  letter-spacing:-.01em;margin:0;text-wrap:balance;}
+h3{font-family:var(--display);font-weight:700;font-size:16px;margin:0;letter-spacing:-.005em;}
+.eyebrow{font-family:var(--mono);font-size:11.5px;font-weight:500;letter-spacing:.16em;
+  text-transform:uppercase;color:var(--ink2);}
+
+/* ---- nameplate ---- */
+.plate{border:1.5px solid var(--ink);background:var(--surface);}
+.plate-top{padding:26px 24px 22px;display:flex;flex-direction:column;gap:10px;}
+.plate-top p{color:var(--ink2);font-size:16px;max-width:60ch;}
+.specs{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));border-top:1.5px solid var(--ink);}
+.spec{padding:12px 16px 14px;border-right:1px solid var(--rule);display:flex;flex-direction:column;gap:3px;}
+.spec:last-child{border-right:0;}
+.spec span{font-family:var(--mono);font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--ink2);}
+.spec b{font-family:var(--mono);font-size:15px;font-weight:600;font-variant-numeric:tabular-nums;}
+
+/* ---- figures ---- */
+figure{margin:0;display:flex;flex-direction:column;gap:12px;}
+.scroller{overflow-x:auto;background:var(--surface);border:1px solid var(--rule);padding:14px;}
+.scroller svg{display:block;height:auto;}
+.fig-wide svg{min-width:820px;width:100%;}
+.fig-half svg{min-width:340px;width:100%;}
+figcaption{font-size:14.5px;line-height:1.5;color:var(--ink2);max-width:62ch;}
+figcaption b{color:var(--ink);font-weight:600;}
+.duo{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:28px;}
+
+/* ---- svg primitives ---- */
+.d-box{fill:var(--surface);stroke:var(--rule);stroke-width:1.5;}
+.d-box-warm{fill:var(--surface);stroke:var(--warm);stroke-width:1.5;}
+.d-box-cool{fill:var(--surface);stroke:var(--cool);stroke-width:1.5;}
+.d-fill2{fill:var(--surface2);stroke:var(--rule);stroke-width:1.5;}
+.z-warm{fill:var(--warm-soft);}
+.z-cool{fill:var(--cool-soft);}
+.t-title{font-family:var(--mono);font-size:14px;font-weight:600;fill:var(--ink);}
+.t-sub{font-family:var(--body);font-size:11.5px;fill:var(--ink2);}
+.t-note{font-family:var(--body);font-size:10.5px;fill:var(--ink2);}
+.t-pin{font-family:var(--mono);font-size:12.5px;font-weight:600;fill:var(--warm);}
+.t-pinc{font-family:var(--mono);font-size:12.5px;font-weight:600;fill:var(--cool);}
+.t-num{font-family:var(--mono);font-size:12px;font-weight:600;fill:var(--ink2);}
+.t-wire{font-family:var(--body);font-size:11px;fill:var(--ink2);}
+.t-zone{font-family:var(--mono);font-size:11px;font-weight:500;letter-spacing:.12em;text-transform:uppercase;}
+.t-zw{fill:var(--warm);}
+.t-zc{fill:var(--cool);}
+.w-warm{stroke:var(--warm);stroke-width:2.5;fill:none;stroke-linejoin:round;}
+.w-cool{stroke:var(--cool);stroke-width:2.5;fill:none;stroke-linejoin:round;}
+.w-gnd{stroke:var(--ink2);stroke-width:2.5;fill:none;stroke-linejoin:round;}
+.dot-warm{fill:var(--warm);}
+.dot-gnd{fill:var(--ink2);}
+.barrier{stroke:var(--ink2);stroke-width:1.5;stroke-dasharray:7 6;fill:none;opacity:.6;}
+.mk-warm{fill:var(--warm);}
+.mk-cool{fill:var(--cool);}
+.mk-gnd{fill:var(--ink2);}
+
+/* ---- table ---- */
+.tablewrap{overflow-x:auto;border:1px solid var(--rule);background:var(--surface);}
+table{border-collapse:collapse;width:100%;min-width:660px;font-size:14.5px;}
+th{font-family:var(--mono);font-size:10.5px;letter-spacing:.13em;text-transform:uppercase;color:var(--ink2);
+  text-align:left;padding:12px 16px;border-bottom:1.5px solid var(--ink);font-weight:500;}
+td{padding:13px 16px;border-bottom:1px solid var(--rule);vertical-align:top;line-height:1.45;}
+tr:last-child td{border-bottom:0;}
+td.pt{font-family:var(--mono);font-size:13px;white-space:nowrap;}
+.sideA{color:var(--warm);font-weight:500;}
+.sideB{color:var(--cool);font-weight:500;}
+
+/* ---- steps ---- */
+ol.steps{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:2px;counter-reset:s;}
+ol.steps li{counter-increment:s;display:grid;grid-template-columns:44px 1fr;gap:14px;
+  padding:13px 0;border-bottom:1px solid var(--rule);align-items:baseline;}
+ol.steps li::before{content:counter(s,decimal-leading-zero);font-family:var(--mono);font-size:13px;
+  font-weight:600;color:var(--warm);font-variant-numeric:tabular-nums;}
+ol.steps li:last-child{border-bottom:0;}
+ol.steps b{font-weight:600;}
+
+/* ---- danger ---- */
+.stops{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:16px;}
+.stop{background:var(--danger-soft);border-left:3px solid var(--danger);padding:16px 18px;
+  display:flex;flex-direction:column;gap:7px;}
+.stop h3{color:var(--danger);}
+.stop p{font-size:14.5px;line-height:1.5;}
+.stop .tag{font-family:var(--mono);font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--danger);}
+hr{border:0;border-top:1px solid var(--rule);margin:0;}
+a{color:var(--warm);}
+:focus-visible{outline:2px solid var(--warm);outline-offset:3px;}
+@media (prefers-reduced-motion:no-preference){html{scroll-behavior:smooth;}}
+</style>
+
+<div class="wrap">
+
+<header class="plate">
+  <div class="plate-top">
+    <div class="eyebrow">Bluedoor · build v1 · minimal</div>
+    <h1>Wiring the ESP32<br>to the old remote</h1>
+    <p>Everything that gets connected, drawn as named parts. No circuit symbols — if you can tell an orange stripe from a brown one and count to four, you can build this.</p>
+  </div>
+  <div class="specs">
+    <div class="spec"><span>Controller</span><b>ESP32 FNK0090</b></div>
+    <div class="spec"><span>Transmitter</span><b>MITTO 12V-UP</b></div>
+    <div class="spec"><span>Drive pin</span><b>GPIO 26</b></div>
+    <div class="spec"><span>Press length</span><b>250 ms</b></div>
+    <div class="spec"><span>Parts cost</span><b>&lt; €10</b></div>
+  </div>
+</header>
+
+<section class="col">
+  <h2>The whole idea in one sentence</h2>
+  <p>The ESP32 does not talk to the garage door. It presses the button on an old remote that is already enrolled with the door — and it presses that button through a chip that passes <em>light</em> instead of electricity, so the two halves never touch.</p>
+</section>
+
+<figure class="fig-wide">
+  <div class="scroller">
+    <svg viewBox="0 0 940 600" role="img" aria-label="Full v1 wiring: a 5 volt phone charger powers the ESP32; GPIO 26 goes through a 330 ohm resistor into pin 1 of a PC817 optocoupler, with a 10 kilohm resistor from GPIO 26 down to ground; PC817 pin 2 returns to ESP32 ground; on the far side, PC817 pins 4 and 3 connect to the plus and minus button pads of the BFT MITTO remote, which keeps its own battery and transmits to the door.">
+      <defs>
+        <marker id="aw" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk-warm"/></marker>
+        <marker id="ac" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk-cool"/></marker>
+        <marker id="ag" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk-gnd"/></marker>
+      </defs>
+
+      <rect x="0" y="0" width="520" height="600" class="z-warm"/>
+      <rect x="520" y="0" width="420" height="600" class="z-cool"/>
+
+      <!-- charger -->
+      <rect x="40" y="30" width="210" height="64" rx="3" class="d-box"/>
+      <text x="145" y="58" text-anchor="middle" class="t-title">5 V phone charger</text>
+      <text x="145" y="78" text-anchor="middle" class="t-sub">already owned</text>
+      <line x1="145" y1="94" x2="145" y2="118" class="w-gnd" marker-end="url(#ag)"/>
+      <text x="155" y="112" class="t-note">USB cable</text>
+
+      <!-- esp32 -->
+      <rect x="40" y="120" width="210" height="300" rx="3" class="d-box-warm"/>
+      <text x="60" y="155" class="t-title">ESP32 board</text>
+      <text x="60" y="175" class="t-sub">Freenove FNK0090</text>
+      <text x="60" y="300" class="t-note">drives GPIO 26 high</text>
+      <text x="60" y="315" class="t-note">for 250 ms = one press</text>
+      <text x="60" y="390" class="t-note">never solder this board —</text>
+      <text x="60" y="405" class="t-note">jumper into its sockets</text>
+      <text x="240" y="245" text-anchor="end" class="t-pin">GPIO 26</text>
+      <circle cx="250" cy="250" r="4.5" class="dot-warm"/>
+      <text x="240" y="345" text-anchor="end" class="t-num">GND</text>
+      <circle cx="250" cy="350" r="4.5" class="dot-gnd"/>
+
+      <!-- signal wire + 330 -->
+      <line x1="250" y1="250" x2="440" y2="250" class="w-warm"/>
+      <circle cx="275" cy="250" r="4.5" class="dot-warm"/>
+      <rect x="300" y="230" width="110" height="40" rx="7" class="d-box-warm"/>
+      <text x="355" y="248" text-anchor="middle" class="t-title">330 Ω</text>
+      <text x="355" y="262" text-anchor="middle" class="t-note">resistor</text>
+
+      <!-- ground wire -->
+      <line x1="250" y1="350" x2="440" y2="350" class="w-gnd"/>
+      <circle cx="410" cy="350" r="4.5" class="dot-gnd"/>
+
+      <!-- pulldown -->
+      <polyline points="275,250 275,490 300,490" class="w-warm"/>
+      <polyline points="410,490 410,350" class="w-warm"/>
+      <rect x="300" y="470" width="110" height="40" rx="7" class="d-box-warm"/>
+      <text x="355" y="488" text-anchor="middle" class="t-title">10 kΩ</text>
+      <text x="355" y="502" text-anchor="middle" class="t-note">resistor</text>
+      <text x="355" y="532" text-anchor="middle" class="t-wire">holds the button un-pressed while the ESP32 boots</text>
+
+      <!-- PC817 -->
+      <rect x="440" y="170" width="160" height="220" rx="3" class="d-fill2"/>
+      <text x="520" y="200" text-anchor="middle" class="t-title">PC817</text>
+      <text x="520" y="218" text-anchor="middle" class="t-sub">optocoupler</text>
+      <text x="452" y="255" class="t-num">1</text>
+      <text x="452" y="355" class="t-num">2</text>
+      <text x="588" y="255" text-anchor="end" class="t-num">4</text>
+      <text x="588" y="355" text-anchor="end" class="t-num">3</text>
+      <text x="520" y="376" text-anchor="middle" class="t-note">light crosses · metal does not</text>
+
+      <!-- to remote -->
+      <line x1="600" y1="250" x2="760" y2="250" class="w-cool"/>
+      <text x="672" y="240" text-anchor="middle" class="t-wire">to the + pad</text>
+      <line x1="600" y1="350" x2="760" y2="350" class="w-cool"/>
+      <text x="672" y="340" text-anchor="middle" class="t-wire">to the − pad</text>
+
+      <!-- remote -->
+      <rect x="730" y="140" width="180" height="300" rx="3" class="d-box-cool"/>
+      <text x="750" y="172" class="t-title">BFT MITTO</text>
+      <text x="750" y="190" class="t-title">12V-UP remote</text>
+      <text x="750" y="208" class="t-sub">opened, lid off</text>
+      <rect x="760" y="236" width="30" height="28" rx="3" class="d-box-cool"/>
+      <text x="775" y="256" text-anchor="middle" class="t-pinc">+</text>
+      <text x="798" y="255" class="t-wire">button pad</text>
+      <rect x="760" y="336" width="30" height="28" rx="3" class="d-box-cool"/>
+      <text x="775" y="356" text-anchor="middle" class="t-pinc">−</text>
+      <text x="798" y="355" class="t-wire">button pad</text>
+      <rect x="760" y="386" width="130" height="42" rx="3" class="d-box"/>
+      <text x="825" y="404" text-anchor="middle" class="t-sub">remote's own battery</text>
+      <text x="825" y="419" text-anchor="middle" class="t-note">leave it in place</text>
+      <line x1="820" y1="138" x2="820" y2="118" class="w-cool" marker-end="url(#ac)"/>
+      <text x="820" y="108" text-anchor="middle" class="t-wire">433.92 MHz → the garage door</text>
+
+      <!-- barrier -->
+      <path d="M520,36 L520,560" class="barrier"/>
+      <text x="520" y="26" text-anchor="middle" class="t-zone t-zw" style="fill:var(--ink2)">isolation barrier</text>
+
+      <text x="260" y="572" text-anchor="middle" class="t-zone t-zw">ESP32 side · 3.3 V · USB powered</text>
+      <text x="730" y="572" text-anchor="middle" class="t-zone t-zc">remote side · its own battery</text>
+    </svg>
+  </div>
+  <figcaption><b>The complete v1 build.</b> Six wires in total. Nothing crosses the dashed line except light inside the PC817 — that is what keeps a mistake on the ESP32 side from reaching a 15-year-old remote you cannot replace.</figcaption>
+</figure>
+
+<section class="col">
+  <h2>The one part that isn't obvious</h2>
+  <p>The <strong>PC817 optocoupler</strong> is a black 4-legged chip. Inside it there is a tiny lamp on one side and a light-operated switch on the other, sealed in the same plastic with no metal between them. The ESP32 lights the lamp; the switch closes; the switch is wired across the remote's button pads, so the remote sees exactly what it sees when your thumb presses the button.</p>
+  <p>Its legs are <strong>not interchangeable</strong>. Two are the lamp side, two are the switch side, and the switch side only conducts one way round.</p>
+</section>
+
+<div class="duo">
+  <figure class="fig-half">
+    <div class="scroller">
+      <svg viewBox="0 0 460 240" role="img" aria-label="PC817 seen from above: a dot marks pin 1 at top left; pin 1 takes the 330 ohm resistor, pin 2 goes to ESP32 ground, pin 4 at top right goes to the plus pad and pin 3 at bottom right to the minus pad.">
+        <rect x="140" y="64" width="30" height="12" rx="2" fill="var(--metal)"/>
+        <rect x="140" y="144" width="30" height="12" rx="2" fill="var(--metal)"/>
+        <rect x="290" y="64" width="30" height="12" rx="2" fill="var(--metal)"/>
+        <rect x="290" y="144" width="30" height="12" rx="2" fill="var(--metal)"/>
+        <rect x="170" y="45" width="120" height="140" rx="4" fill="var(--chip)" stroke="var(--rule)" stroke-width="1.5"/>
+        <path d="M215,45 a15,15 0 0 0 30,0" fill="var(--surface)"/>
+        <circle cx="188" cy="66" r="6" fill="var(--chip-ink)"/>
+        <text x="230" y="122" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="15" font-weight="600" fill="var(--chip-ink)">PC817</text>
+        <text x="132" y="74" text-anchor="end" class="t-pin">1 · from 330 Ω</text>
+        <text x="132" y="154" text-anchor="end" class="t-pin">2 · to ESP32 GND</text>
+        <text x="328" y="74" class="t-pinc">4 · to + pad</text>
+        <text x="328" y="154" class="t-pinc">3 · to − pad</text>
+        <text x="230" y="215" text-anchor="middle" class="t-note">seen from above · the dot marks pin 1</text>
+        <text x="230" y="230" text-anchor="middle" class="t-note">count down the left side, then up the right</text>
+      </svg>
+    </div>
+    <figcaption><b>Which leg is which.</b> Hold it with the dot at the top left and the numbering is fixed. Get pins 4 and 3 backwards and nothing burns — the button simply never presses.</figcaption>
+  </figure>
+
+  <figure class="fig-half">
+    <div class="scroller">
+      <svg viewBox="0 0 460 240" role="img" aria-label="Inside the PC817: a tiny lamp on the ESP32 side shines across a sealed gap onto a light-operated switch on the remote side; only light crosses.">
+        <rect x="30" y="50" width="400" height="130" rx="4" fill="none" stroke="var(--rule)" stroke-width="1.5" stroke-dasharray="6 5"/>
+        <text x="230" y="42" text-anchor="middle" class="t-note">inside the black plastic</text>
+        <circle cx="120" cy="112" r="26" fill="var(--warm-soft)" stroke="var(--warm)" stroke-width="2"/>
+        <circle cx="120" cy="112" r="9" fill="var(--warm)"/>
+        <text x="120" y="162" text-anchor="middle" class="t-pin">tiny lamp</text>
+        <circle cx="340" cy="112" r="26" fill="var(--cool-soft)" stroke="var(--cool)" stroke-width="2"/>
+        <circle cx="330" cy="120" r="4" fill="var(--cool)"/>
+        <circle cx="352" cy="120" r="4" fill="var(--cool)"/>
+        <line x1="330" y1="120" x2="354" y2="103" stroke="var(--cool)" stroke-width="2.5"/>
+        <text x="340" y="162" text-anchor="middle" class="t-pinc">switch</text>
+        <line x1="156" y1="104" x2="300" y2="104" stroke="var(--warm)" stroke-width="2" marker-end="url(#aw2)"/>
+        <line x1="156" y1="120" x2="300" y2="120" stroke="var(--warm)" stroke-width="2" marker-end="url(#aw2)"/>
+        <defs><marker id="aw2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk-warm"/></marker></defs>
+        <text x="228" y="88" text-anchor="middle" class="t-note">light only — no metal path</text>
+        <text x="120" y="205" text-anchor="middle" class="t-note">ESP32 lights it</text>
+        <text x="340" y="205" text-anchor="middle" class="t-note">remote's button closes</text>
+      </svg>
+    </div>
+    <figcaption><b>Why it's safe.</b> The ESP32 can never put its 3.3 V onto the remote, and a fault in the remote can never reach the ESP32. That gap is the whole reason this part exists.</figcaption>
+  </figure>
+</div>
+
+<figure class="fig-half" style="max-width:560px">
+  <div class="scroller">
+    <svg viewBox="0 0 460 230" role="img" aria-label="Resistor identification: the 330 ohm resistor has orange, orange, brown then gold stripes; the 10 kilohm resistor has brown, black, orange then gold stripes.">
+      <line x1="30" y1="52" x2="430" y2="52" stroke="var(--metal)" stroke-width="3"/>
+      <rect x="130" y="30" width="200" height="44" rx="20" fill="#D8C6A2" stroke="var(--rule)" stroke-width="1"/>
+      <rect x="152" y="30" width="15" height="44" fill="#E07B22"/>
+      <rect x="182" y="30" width="15" height="44" fill="#E07B22"/>
+      <rect x="212" y="30" width="15" height="44" fill="#7A4A22"/>
+      <rect x="292" y="30" width="15" height="44" fill="#C9A227"/>
+      <text x="230" y="97" text-anchor="middle" class="t-pin">330 Ω · orange orange brown · gold</text>
+
+      <line x1="30" y1="152" x2="430" y2="152" stroke="var(--metal)" stroke-width="3"/>
+      <rect x="130" y="130" width="200" height="44" rx="20" fill="#D8C6A2" stroke="var(--rule)" stroke-width="1"/>
+      <rect x="152" y="130" width="15" height="44" fill="#7A4A22"/>
+      <rect x="182" y="130" width="15" height="44" fill="#1A1A1A"/>
+      <rect x="212" y="130" width="15" height="44" fill="#E07B22"/>
+      <rect x="292" y="130" width="15" height="44" fill="#C9A227"/>
+      <text x="230" y="197" text-anchor="middle" class="t-pin">10 kΩ · brown black orange · gold</text>
+      <text x="230" y="220" text-anchor="middle" class="t-note">read from the end where the stripes are bunched together</text>
+    </svg>
+  </div>
+  <figcaption><b>Telling the two resistors apart.</b> The lone gold stripe sits at the far end — start counting from the other side. Unlike the PC817, resistors have no direction: either way round is fine.</figcaption>
+</figure>
+
+<section class="col">
+  <h2>Before the iron gets hot: find the + pad</h2>
+  <p>The remote's two button pads are not marked. The PC817's switch side only conducts one way, so you have to know which pad is which before you solder. This is a two-minute multimeter job and it is the single measurement that decides whether the finished build works.</p>
+</section>
+
+<figure class="fig-half" style="max-width:680px">
+  <div class="scroller">
+    <svg viewBox="0 0 620 250" role="img" aria-label="Measuring the remote's button pads: the multimeter's red probe on one pad and black probe on the other, set to DC volts; a positive reading means the pad under the red probe is the plus pad.">
+      <rect x="30" y="55" width="250" height="150" rx="4" class="d-box-cool"/>
+      <text x="48" y="82" class="t-title">remote board</text>
+      <text x="48" y="100" class="t-sub">lid off, battery still in</text>
+      <circle cx="110" cy="155" r="18" fill="var(--surface2)" stroke="var(--cool)" stroke-width="2"/>
+      <text x="110" y="196" text-anchor="middle" class="t-note">pad A</text>
+      <circle cx="205" cy="155" r="18" fill="var(--surface2)" stroke="var(--cool)" stroke-width="2"/>
+      <text x="205" y="196" text-anchor="middle" class="t-note">pad B</text>
+
+      <rect x="400" y="45" width="185" height="125" rx="6" class="d-box"/>
+      <rect x="418" y="62" width="149" height="50" rx="3" fill="var(--surface2)" stroke="var(--rule)"/>
+      <text x="492" y="99" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="24" font-weight="600" fill="var(--ink)">2.8 V</text>
+      <text x="492" y="135" text-anchor="middle" class="t-sub">multimeter — DC volts</text>
+      <text x="492" y="153" text-anchor="middle" class="t-note">reading is positive</text>
+
+      <path d="M400,80 Q265,48 116,139" stroke="#C0392B" stroke-width="2.5" fill="none"/>
+      <circle cx="116" cy="139" r="4.5" fill="#C0392B"/>
+      <text x="250" y="45" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="11.5" font-weight="600" fill="#C0392B">RED probe</text>
+      <path d="M400,140 Q305,195 214,172" stroke="var(--ink)" stroke-width="2.5" fill="none"/>
+      <circle cx="214" cy="172" r="4.5" fill="var(--ink)"/>
+      <text x="300" y="222" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="11.5" font-weight="600" fill="var(--ink)">BLACK probe</text>
+    </svg>
+  </div>
+  <figcaption><b>Positive number → the pad under the red probe is the + pad.</b> If the number comes out negative, swap the probes and read again. Mark the + pad immediately with a dab of nail varnish or a marker dot, and write down the battery type while the remote is open.</figcaption>
+</figure>
+
+<section class="col">
+  <h2>Every connection, listed</h2>
+</section>
+<div class="tablewrap">
+  <table>
+    <thead><tr><th>From</th><th>To</th><th>What the wire is for</th></tr></thead>
+    <tbody>
+      <tr><td class="pt">phone charger + USB cable</td><td class="pt">ESP32 USB socket</td><td>Permanent 5 V. This is the only power the ESP32 side ever gets.</td></tr>
+      <tr><td class="pt sideA">ESP32 GPIO 26</td><td class="pt sideA">330 Ω resistor → PC817 pin 1</td><td>Carries the 250 ms press. The resistor limits the current so the lamp inside the PC817 isn't overdriven.</td></tr>
+      <tr><td class="pt sideA">ESP32 GPIO 26</td><td class="pt sideA">10 kΩ resistor → ESP32 GND</td><td>Pulldown. Ties the pin to 0 V whenever the ESP32 isn't actively driving it — during boot, reset, or a power blip.</td></tr>
+      <tr><td class="pt sideA">PC817 pin 2</td><td class="pt sideA">ESP32 GND</td><td>Return path for the lamp. Without it nothing lights.</td></tr>
+      <tr><td class="pt sideB">PC817 pin 4</td><td class="pt sideB">remote's + button pad</td><td>Switch side, positive. Directional — this one must go to the pad you measured as +.</td></tr>
+      <tr><td class="pt sideB">PC817 pin 3</td><td class="pt sideB">remote's − button pad</td><td>Switch side, negative.</td></tr>
+      <tr><td class="pt sideB">remote battery</td><td class="pt sideB">stays where it is</td><td>The remote runs on its own power, exactly as it always did. Nothing is fed to it from the ESP32.</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<section class="col">
+  <h2>Three ways to wreck this</h2>
+  <p>Read these before step 01. Each one is cheap to avoid and expensive to undo.</p>
+</section>
+<div class="stops">
+  <div class="stop">
+    <div class="tag">Order of work</div>
+    <h3>Don't open the old remote yet</h3>
+    <p>The old remote is the programming key for enrolling the new one. Enroll the MITTO COOL C2 first and confirm it works on the door. Only then does the old one become a component.</p>
+  </div>
+  <div class="stop">
+    <div class="tag">Not optional</div>
+    <h3>Don't skip the 10 kΩ</h3>
+    <p>Without the pulldown, GPIO 26 floats while the ESP32 boots. A floating pin can read as a press — meaning a power cut could open your garage door on its own when the power returns.</p>
+  </div>
+  <div class="stop">
+    <div class="tag">Directional</div>
+    <h3>Don't guess the pad polarity</h3>
+    <p>PC817 pins 4 and 3 conduct one way only. Wired backwards, everything looks correct and the button never presses — hours of chasing a fault that is a swapped pair of wires.</p>
+  </div>
+</div>
+
+<section class="col">
+  <h2>Build order</h2>
+  <ol class="steps">
+    <li><b>Enroll the new remote.</b> MITTO COOL C2, using the old remote as the programming key. Test it on the door several times. Nothing gets opened before this is solid.</li>
+    <li><b>Range-check the old remote</b> from the spot where the ESP32 will live. If the door doesn't respond from there, the mounting spot moves — not the plan.</li>
+    <li><b>Open the old remote.</b> Photograph the board, note the battery type, buy a spare.</li>
+    <li><b>Measure the pads.</b> DC volts across them, find +, mark it. (Figure above.)</li>
+    <li><b>Build the small assembly.</b> PC817 with the 330 Ω on pin 1 and the 10 kΩ across the GPIO/GND leads, soldered directly onto the flying leads. Heat-shrink every joint — no perfboard needed.</li>
+    <li><b>Jumper it into the ESP32.</b> Male-to-female Dupont wires into the board's existing sockets. Never solder the ESP32 itself.</li>
+    <li><b>Solder the two thin wires to the pads.</b> Pin 4 to +, pin 3 to −. Fine tip, flux, clean the flux off afterwards with isopropyl.</li>
+    <li><b>Power up in DRY-RUN.</b> The firmware boots there by default and only logs. Watch it for a session before touching the mode.</li>
+    <li><b>First real press, supervised.</b> Stand at the door, working remote in hand, and use the manual pulse. A press is a step command — be ready to correct it.</li>
+    <li><b>Box it up.</b> ESP32 and remote in one small box, one hole for the USB cable, nothing pressing on the remote's own button.</li>
+  </ol>
+</section>
+
+<hr>
+<section class="col">
+  <p class="t-note" style="font-size:14px;color:var(--ink2)">Companion to <b>COMPONENTS.md</b> and <b>PLAN.md</b>. Build v1 is deliberately minimal: no door sensor, arrival only, and the door keeps its normal remotes and physical key as fallback throughout.</p>
+</section>
+
+</div>
