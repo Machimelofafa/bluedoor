@@ -92,6 +92,13 @@ figcaption b{color:var(--ink);font-weight:600;}
 .mk-warm{fill:var(--warm);}
 .mk-cool{fill:var(--cool);}
 .mk-gnd{fill:var(--ink2);}
+.solder{fill:var(--metal);stroke:var(--ink);stroke-width:1;}
+.shrink{fill:var(--ink2);opacity:.18;}
+.pad-a{fill:var(--surface2);stroke:var(--ink);stroke-width:1.5;}
+.pad-b{fill:var(--cool-soft);stroke:var(--cool);stroke-width:2;}
+.pad-case{fill:var(--rule);stroke:var(--ink2);stroke-width:1.5;stroke-dasharray:3 2;}
+.glue{fill:var(--surface2);stroke:var(--ink2);stroke-width:1;stroke-dasharray:3 2;opacity:.9;}
+.tape{fill:var(--warm-soft);stroke:var(--warm);stroke-width:1;opacity:.9;}
 
 /* ---- table ---- */
 .tablewrap{overflow-x:auto;border:1px solid var(--rule);background:var(--surface);}
@@ -106,10 +113,11 @@ td.pt{font-family:var(--mono);font-size:13px;white-space:nowrap;}
 
 /* ---- steps ---- */
 ol.steps{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:2px;counter-reset:s;}
-ol.steps li{counter-increment:s;display:grid;grid-template-columns:44px 1fr;gap:14px;
-  padding:13px 0;border-bottom:1px solid var(--rule);align-items:baseline;}
+ol.steps li{counter-increment:s;position:relative;
+  padding:13px 0 13px 58px;border-bottom:1px solid var(--rule);}
 ol.steps li::before{content:counter(s,decimal-leading-zero);font-family:var(--mono);font-size:13px;
-  font-weight:600;color:var(--warm);font-variant-numeric:tabular-nums;}
+  font-weight:600;color:var(--warm);font-variant-numeric:tabular-nums;
+  position:absolute;left:0;top:17px;}
 ol.steps li:last-child{border-bottom:0;}
 ol.steps b{font-weight:600;}
 
@@ -139,6 +147,7 @@ a{color:var(--warm);}
     <div class="spec"><span>Transmitter</span><b>MITTO 12V-UP</b></div>
     <div class="spec"><span>Drive pin</span><b>GPIO 26</b></div>
     <div class="spec"><span>Press length</span><b>250 ms</b></div>
+    <div class="spec"><span>Remote pads</span><b>4 (+) · 5 (−)</b></div>
     <div class="spec"><span>Parts cost</span><b>&lt; €10</b></div>
   </div>
 </header>
@@ -150,7 +159,7 @@ a{color:var(--warm);}
 
 <figure class="fig-wide">
   <div class="scroller">
-    <svg viewBox="0 0 940 600" role="img" aria-label="Full v1 wiring: a 5 volt phone charger powers the ESP32; GPIO 26 goes through a 330 ohm resistor into pin 1 of a PC817 optocoupler, with a 10 kilohm resistor from GPIO 26 down to ground; PC817 pin 2 returns to ESP32 ground; on the far side, PC817 pins 4 and 3 connect to the plus and minus button pads of the BFT MITTO remote, which keeps its own battery and transmits to the door.">
+    <svg viewBox="0 0 940 600" role="img" aria-label="Full v1 wiring: a 5 volt phone charger powers the ESP32; GPIO 26 goes through a 330 ohm resistor into pin 1 of a PC817 optocoupler, with a 10 kilohm resistor from GPIO 26 down to ground; PC817 pin 2 returns to ESP32 ground; on the far side, PC817 pin 4 connects to pad 4 of the enrolled switch on the BFT MITTO remote, which sits at plus 12 volts, and pin 3 to pad 5, which keeps its own battery and transmits to the door.">
       <defs>
         <marker id="aw" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk-warm"/></marker>
         <marker id="ac" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk-cool"/></marker>
@@ -174,7 +183,7 @@ a{color:var(--warm);}
       <text x="60" y="300" class="t-note">drives GPIO 26 high</text>
       <text x="60" y="315" class="t-note">for 250 ms = one press</text>
       <text x="60" y="390" class="t-note">never solder this board —</text>
-      <text x="60" y="405" class="t-note">jumper into its sockets</text>
+      <text x="60" y="405" class="t-note">jumper onto its pins</text>
       <text x="240" y="245" text-anchor="end" class="t-pin">GPIO 26</text>
       <circle cx="250" cy="250" r="4.5" class="dot-warm"/>
       <text x="240" y="345" text-anchor="end" class="t-num">GND</text>
@@ -211,9 +220,9 @@ a{color:var(--warm);}
 
       <!-- to remote -->
       <line x1="600" y1="250" x2="760" y2="250" class="w-cool"/>
-      <text x="672" y="240" text-anchor="middle" class="t-wire">to the + pad</text>
+      <text x="672" y="240" text-anchor="middle" class="t-wire">to pad 4 · the +12 V side</text>
       <line x1="600" y1="350" x2="760" y2="350" class="w-cool"/>
-      <text x="672" y="340" text-anchor="middle" class="t-wire">to the − pad</text>
+      <text x="672" y="340" text-anchor="middle" class="t-wire">to pad 5</text>
 
       <!-- remote -->
       <rect x="730" y="140" width="180" height="300" rx="3" class="d-box-cool"/>
@@ -222,10 +231,10 @@ a{color:var(--warm);}
       <text x="750" y="208" class="t-sub">opened, lid off</text>
       <rect x="760" y="236" width="30" height="28" rx="3" class="d-box-cool"/>
       <text x="775" y="256" text-anchor="middle" class="t-pinc">+</text>
-      <text x="798" y="255" class="t-wire">button pad</text>
+      <text x="798" y="255" class="t-wire">pad 4 of the switch</text>
       <rect x="760" y="336" width="30" height="28" rx="3" class="d-box-cool"/>
       <text x="775" y="356" text-anchor="middle" class="t-pinc">−</text>
-      <text x="798" y="355" class="t-wire">button pad</text>
+      <text x="798" y="355" class="t-wire">pad 5 of the switch</text>
       <rect x="760" y="386" width="130" height="42" rx="3" class="d-box"/>
       <text x="825" y="404" text-anchor="middle" class="t-sub">remote's own battery</text>
       <text x="825" y="419" text-anchor="middle" class="t-note">leave it in place</text>
@@ -240,7 +249,7 @@ a{color:var(--warm);}
       <text x="730" y="572" text-anchor="middle" class="t-zone t-zc">remote side · its own battery</text>
     </svg>
   </div>
-  <figcaption><b>The complete v1 build.</b> Six wires in total. Nothing crosses the dashed line except light inside the PC817 — that is what keeps a mistake on the ESP32 side from reaching a 15-year-old remote you cannot replace.</figcaption>
+  <figcaption><b>The complete v1 build.</b> Six wires in total. Nothing crosses the dashed line except light inside the PC817 — that is what keeps a mistake on the ESP32 side from reaching a 15-year-old remote you cannot replace. The lines are electrical connections, not solder joints: at the ESP32 they are Dupont jumpers plugged into the board's headers — the soldering all happens out on the resistor-and-opto assembly and at the remote's pads.</figcaption>
 </figure>
 
 <section class="col">
@@ -263,8 +272,8 @@ a{color:var(--warm);}
         <text x="230" y="122" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="15" font-weight="600" fill="var(--chip-ink)">PC817</text>
         <text x="132" y="74" text-anchor="end" class="t-pin">1 · from 330 Ω</text>
         <text x="132" y="154" text-anchor="end" class="t-pin">2 · to ESP32 GND</text>
-        <text x="328" y="74" class="t-pinc">4 · to + pad</text>
-        <text x="328" y="154" class="t-pinc">3 · to − pad</text>
+        <text x="328" y="74" class="t-pinc">4 · to pad 4 (+)</text>
+        <text x="328" y="154" class="t-pinc">3 · to pad 5 (−)</text>
         <text x="230" y="215" text-anchor="middle" class="t-note">seen from above · the dot marks pin 1</text>
         <text x="230" y="230" text-anchor="middle" class="t-note">count down the left side, then up the right</text>
       </svg>
@@ -299,49 +308,101 @@ a{color:var(--warm);}
 
 <figure class="fig-half" style="max-width:560px">
   <div class="scroller">
-    <svg viewBox="0 0 460 230" role="img" aria-label="Resistor identification: the 330 ohm resistor has orange, orange, brown then gold stripes; the 10 kilohm resistor has brown, black, orange then gold stripes.">
+    <svg viewBox="0 0 460 230" role="img" aria-label="Resistor identification for the blue 5-band metal-film parts on hand: the 330 ohm has orange, orange, black, black stripes then a lone brown; the 10 kilohm has brown, black, black, red stripes then a lone brown.">
       <line x1="30" y1="52" x2="430" y2="52" stroke="var(--metal)" stroke-width="3"/>
-      <rect x="130" y="30" width="200" height="44" rx="20" fill="#D8C6A2" stroke="var(--rule)" stroke-width="1"/>
-      <rect x="152" y="30" width="15" height="44" fill="#E07B22"/>
-      <rect x="182" y="30" width="15" height="44" fill="#E07B22"/>
-      <rect x="212" y="30" width="15" height="44" fill="#7A4A22"/>
-      <rect x="292" y="30" width="15" height="44" fill="#C9A227"/>
-      <text x="230" y="97" text-anchor="middle" class="t-pin">330 Ω · orange orange brown · gold</text>
+      <rect x="130" y="30" width="200" height="44" rx="20" fill="#4AA0BE" stroke="var(--rule)" stroke-width="1"/>
+      <rect x="146" y="30" width="14" height="44" fill="#E07B22"/>
+      <rect x="172" y="30" width="14" height="44" fill="#E07B22"/>
+      <rect x="198" y="30" width="14" height="44" fill="#1A1A1A"/>
+      <rect x="224" y="30" width="14" height="44" fill="#1A1A1A"/>
+      <rect x="296" y="30" width="14" height="44" fill="#7A4A22"/>
+      <text x="230" y="97" text-anchor="middle" class="t-pin">330 Ω · orange orange black · ×black · brown</text>
 
       <line x1="30" y1="152" x2="430" y2="152" stroke="var(--metal)" stroke-width="3"/>
-      <rect x="130" y="130" width="200" height="44" rx="20" fill="#D8C6A2" stroke="var(--rule)" stroke-width="1"/>
-      <rect x="152" y="130" width="15" height="44" fill="#7A4A22"/>
-      <rect x="182" y="130" width="15" height="44" fill="#1A1A1A"/>
-      <rect x="212" y="130" width="15" height="44" fill="#E07B22"/>
-      <rect x="292" y="130" width="15" height="44" fill="#C9A227"/>
-      <text x="230" y="197" text-anchor="middle" class="t-pin">10 kΩ · brown black orange · gold</text>
+      <rect x="130" y="130" width="200" height="44" rx="20" fill="#4AA0BE" stroke="var(--rule)" stroke-width="1"/>
+      <rect x="146" y="130" width="14" height="44" fill="#7A4A22"/>
+      <rect x="172" y="130" width="14" height="44" fill="#1A1A1A"/>
+      <rect x="198" y="130" width="14" height="44" fill="#1A1A1A"/>
+      <rect x="224" y="130" width="14" height="44" fill="#C0392B"/>
+      <rect x="296" y="130" width="14" height="44" fill="#7A4A22"/>
+      <text x="230" y="197" text-anchor="middle" class="t-pin">10 kΩ · brown black black · ×red · brown</text>
       <text x="230" y="220" text-anchor="middle" class="t-note">read from the end where the stripes are bunched together</text>
     </svg>
   </div>
-  <figcaption><b>Telling the two resistors apart.</b> The lone gold stripe sits at the far end — start counting from the other side. Unlike the PC817, resistors have no direction: either way round is fine.</figcaption>
+  <figcaption><b>Telling the two resistors apart</b> — drawn as the actual parts on hand: blue 5-band 1% metal film (verified from photos, 2026-08-31). The lone brown tolerance stripe sits apart at the far end, and since brown can appear at both ends, the quick tell is: <b>two orange stripes = 330 Ω, a red stripe = 10 kΩ</b>. If ever in doubt, the multimeter settles it in seconds. Unlike the PC817, resistors have no direction: either way round is fine.</figcaption>
 </figure>
 
 <section class="col">
-  <h2>Before the iron gets hot: find the + pad</h2>
-  <p>The remote's two button pads are not marked. The PC817's switch side only conducts one way, so you have to know which pad is which before you solder. This is a two-minute multimeter job and it is the single measurement that decides whether the finished build works.</p>
+  <h2>The remote's side, as measured</h2>
+  <p>The MITTO's board carries four surface-mount switches around the slot for its single 12 V cell. The one enrolled on the door is the <strong>upper-left switch with the remote held nose up</strong> — beside the "IMEX" print and two large solder-blob holes. It has <strong>five pads, not two</strong>, and they were mapped with the multimeter on 2026-09-03.</p>
+  <p>Battery out, button up: pads 1 and 5 beep to each other, pads 3 and 4 beep to each other, pad 2 is only the metal case. Button pressed: 1–3, 5–3 and 1–4 all beep — the two groups join. Battery in, button up, red probe on pad 4 and black on pad 5: about <strong>+12 V</strong>. So the 3/4 group is the + side of the switch.</p>
+  <p>That fixes the wiring: <strong>PC817 pin 4 → pad 4, PC817 pin 3 → pad 5.</strong> Both sit on the switch's bottom edge, apart from each other and well away from the case pad. Pads 3 and 1 are the same nets as 4 and 5 — spares if a pad ever lifts.</p>
 </section>
+
+<figure class="fig-half" style="max-width:700px">
+  <div class="scroller">
+    <svg viewBox="0 0 700 320" role="img" aria-label="The enrolled switch seen from above, nose up: a square metal body with a round plunger, three pads along its top edge numbered 1, 2, 3 and two along its bottom edge numbered 5 and 4. Pads 1 and 5 are joined inside, pads 3 and 4 are joined inside, pad 2 is the metal case. Pressing joins the two groups. Pad 4 is the plus side at 12 volts. The two leads go from pad 4 to PC817 pin 4 and from pad 5 to PC817 pin 3.">
+      <!-- pads: top edge -->
+      <rect x="150" y="48" width="34" height="26" rx="3" class="pad-a"/>
+      <rect x="213" y="48" width="34" height="26" rx="3" class="pad-case"/>
+      <rect x="276" y="48" width="34" height="26" rx="3" class="pad-b"/>
+      <text x="167" y="38" text-anchor="middle" class="t-num">1</text>
+      <text x="230" y="38" text-anchor="middle" class="t-num">2</text>
+      <text x="293" y="38" text-anchor="middle" class="t-num">3</text>
+      <!-- pads: bottom edge -->
+      <rect x="150" y="226" width="34" height="26" rx="3" class="pad-a"/>
+      <rect x="276" y="226" width="34" height="26" rx="3" class="pad-b"/>
+      <text x="150" y="272" text-anchor="end" class="t-num">5</text>
+      <text x="310" y="272" class="t-num">4</text>
+      <!-- body -->
+      <rect x="140" y="70" width="180" height="160" rx="6" fill="var(--metal)" stroke="var(--ink)" stroke-width="1.5" opacity=".92"/>
+      <!-- internal links, shown as if seen through the body -->
+      <path d="M167,74 L167,226" stroke="var(--ink)" stroke-width="2" stroke-dasharray="5 4" opacity=".7"/>
+      <path d="M293,74 L293,226" stroke="var(--cool)" stroke-width="2" stroke-dasharray="5 4" opacity=".9"/>
+      <line x1="167" y1="104" x2="196" y2="104" stroke="var(--ink)" stroke-width="2" opacity=".7"/>
+      <line x1="264" y1="104" x2="293" y2="104" stroke="var(--cool)" stroke-width="2" opacity=".9"/>
+      <line x1="196" y1="104" x2="258" y2="90" stroke="var(--ink)" stroke-width="2" opacity=".7"/>
+      <text x="230" y="124" text-anchor="middle" class="t-note">closes when pressed</text>
+      <circle cx="230" cy="172" r="30" fill="var(--danger)" opacity=".8"/>
+      <text x="230" y="176" text-anchor="middle" class="t-note" fill="var(--surface)" style="fill:var(--surface)">plunger</text>
+      <!-- leads -->
+      <path d="M167,252 L167,296" class="w-cool"/>
+      <path d="M293,252 L293,296" class="w-cool"/>
+      <text x="152" y="312" text-anchor="end" class="t-pinc">→ PC817 pin 3</text>
+      <text x="308" y="312" class="t-pinc">→ PC817 pin 4</text>
+      <!-- legend -->
+      <rect x="372" y="58" width="18" height="14" rx="2" class="pad-b"/>
+      <text x="400" y="70" class="t-sub">pads 3 · 4 — one side of the switch, at <tspan font-weight="600">+12 V</tspan></text>
+      <rect x="372" y="98" width="18" height="14" rx="2" class="pad-a"/>
+      <text x="400" y="110" class="t-sub">pads 1 · 5 — the other side, the low one</text>
+      <rect x="372" y="138" width="18" height="14" rx="2" class="pad-case"/>
+      <text x="400" y="150" class="t-sub">pad 2 — the metal case, not a contact</text>
+      <text x="372" y="190" class="t-sub">pressed: the two sides join</text>
+      <text x="372" y="206" class="t-note">(1–3, 5–3 and 1–4 all beep)</text>
+      <text x="372" y="244" class="t-title" style="fill:var(--cool)">solder: pin 4 → pad 4 · pin 3 → pad 5</text>
+      <text x="372" y="262" class="t-note">both on the bottom edge — the case pad stays bare</text>
+      <text x="372" y="300" class="t-note">seen from above, remote held nose up</text>
+    </svg>
+  </div>
+  <figcaption><b>The enrolled switch, pad by pad.</b> Numbering follows the owner's sketch (photos in <b>media/remote/</b>). A tact switch has two contact groups; each group reaches two pads, which is why 1 and 5 beep unpressed and 3 and 4 beep unpressed. The fifth pad is the shell, which wraps the whole body — nothing may touch it.</figcaption>
+</figure>
 
 <figure class="fig-half" style="max-width:680px">
   <div class="scroller">
-    <svg viewBox="0 0 620 250" role="img" aria-label="Measuring the remote's button pads: the multimeter's red probe on one pad and black probe on the other, set to DC volts; a positive reading means the pad under the red probe is the plus pad.">
+    <svg viewBox="0 0 620 250" role="img" aria-label="The confirming measurement: the multimeter's red probe on pad 4 and black probe on pad 5 with the battery in, set to DC volts, reading about 12 volts positive; so pad 4 is the plus side.">
       <rect x="30" y="55" width="250" height="150" rx="4" class="d-box-cool"/>
       <text x="48" y="82" class="t-title">remote board</text>
-      <text x="48" y="100" class="t-sub">lid off, battery still in</text>
-      <circle cx="110" cy="155" r="18" fill="var(--surface2)" stroke="var(--cool)" stroke-width="2"/>
-      <text x="110" y="196" text-anchor="middle" class="t-note">pad A</text>
-      <circle cx="205" cy="155" r="18" fill="var(--surface2)" stroke="var(--cool)" stroke-width="2"/>
-      <text x="205" y="196" text-anchor="middle" class="t-note">pad B</text>
+      <text x="48" y="100" class="t-sub">battery in, button not pressed</text>
+      <circle cx="110" cy="155" r="18" class="pad-b"/>
+      <text x="110" y="196" text-anchor="middle" class="t-note">pad 4</text>
+      <circle cx="205" cy="155" r="18" class="pad-a"/>
+      <text x="205" y="196" text-anchor="middle" class="t-note">pad 5</text>
 
       <rect x="400" y="45" width="185" height="125" rx="6" class="d-box"/>
       <rect x="418" y="62" width="149" height="50" rx="3" fill="var(--surface2)" stroke="var(--rule)"/>
-      <text x="492" y="99" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="24" font-weight="600" fill="var(--ink)">2.8 V</text>
+      <text x="492" y="99" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="24" font-weight="600" fill="var(--ink)">+12 V</text>
       <text x="492" y="135" text-anchor="middle" class="t-sub">multimeter — DC volts</text>
-      <text x="492" y="153" text-anchor="middle" class="t-note">reading is positive</text>
+      <text x="492" y="153" text-anchor="middle" class="t-note">measured 2026-09-03</text>
 
       <path d="M400,80 Q265,48 116,139" stroke="#C0392B" stroke-width="2.5" fill="none"/>
       <circle cx="116" cy="139" r="4.5" fill="#C0392B"/>
@@ -351,7 +412,7 @@ a{color:var(--warm);}
       <text x="300" y="222" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="11.5" font-weight="600" fill="var(--ink)">BLACK probe</text>
     </svg>
   </div>
-  <figcaption><b>Positive number → the pad under the red probe is the + pad.</b> If the number comes out negative, swap the probes and read again. Mark the + pad immediately with a dab of nail varnish or a marker dot, and write down the battery type while the remote is open.</figcaption>
+  <figcaption><b>Red on pad 4, black on pad 5, positive → pad 4 is the + side.</b> This is the one reading the whole build hangs on, and it has been taken. Repeat it once more right before the iron gets hot: it costs ten seconds, and the PC817's switch side only conducts with pin 4 on the higher pad.</figcaption>
 </figure>
 
 <section class="col">
@@ -365,22 +426,238 @@ a{color:var(--warm);}
       <tr><td class="pt sideA">ESP32 GPIO 26</td><td class="pt sideA">330 Ω resistor → PC817 pin 1</td><td>Carries the 250 ms press. The resistor limits the current so the lamp inside the PC817 isn't overdriven.</td></tr>
       <tr><td class="pt sideA">ESP32 GPIO 26</td><td class="pt sideA">10 kΩ resistor → ESP32 GND</td><td>Pulldown. Ties the pin to 0 V whenever the ESP32 isn't actively driving it — during boot, reset, or a power blip.</td></tr>
       <tr><td class="pt sideA">PC817 pin 2</td><td class="pt sideA">ESP32 GND</td><td>Return path for the lamp. Without it nothing lights.</td></tr>
-      <tr><td class="pt sideB">PC817 pin 4</td><td class="pt sideB">remote's + button pad</td><td>Switch side, positive. Directional — this one must go to the pad you measured as +.</td></tr>
-      <tr><td class="pt sideB">PC817 pin 3</td><td class="pt sideB">remote's − button pad</td><td>Switch side, negative.</td></tr>
+      <tr><td class="pt sideB">PC817 pin 4</td><td class="pt sideB">remote pad 4 (+)</td><td>Switch side, positive. Directional — pad 4 is the side measured at +12 V. Pad 3 is the same net if 4 is ever damaged.</td></tr>
+      <tr><td class="pt sideB">PC817 pin 3</td><td class="pt sideB">remote pad 5 (−)</td><td>Switch side, negative. Pad 1 is the same net if 5 is ever damaged.</td></tr>
+      <tr><td class="pt sideB">remote pad 2</td><td class="pt sideB">nothing</td><td>The switch's metal case. Stays bare; no lead or solder may reach it.</td></tr>
       <tr><td class="pt sideB">remote battery</td><td class="pt sideB">stays where it is</td><td>The remote runs on its own power, exactly as it always did. Nothing is fed to it from the ESP32.</td></tr>
     </tbody>
   </table>
 </div>
 
 <section class="col">
-  <h2>Three ways to wreck this</h2>
+  <h2>How it physically goes together</h2>
+  <p>The schematic above shows what connects to what. This one shows what the finished thing actually looks like. There is no circuit board: the parts are soldered leg-to-leg in mid-air — "dead-bug" style — and every joint is sealed in heat-shrink. The whole assembly hangs off <strong>two Dupont jumpers whose female ends simply push onto the ESP32's header pins</strong>. Nothing is ever soldered to the ESP32: pull two connectors and the board is free for reflashing or replacement.</p>
+</section>
+
+<figure class="fig-wide">
+  <div class="scroller">
+    <svg viewBox="0 0 940 640" role="img" aria-label="Physical assembly: two Dupont jumpers push their female ends onto the ESP32 board's GPIO 26 and GND header pins; their cut ends are soldered in mid-air joints — J1 joins the GPIO pigtail with one leg each of the 330 ohm and 10 kilohm resistors, J2 joins the 330 ohm to PC817 pin 1, J3 joins the ground pigtail, the 10 kilohm's other leg and PC817 pin 2 — each joint covered in heat-shrink; thin flying leads run from PC817 pins 4 and 3 to solder joints on pad 4 and pad 5 of the remote's enrolled switch. An inset shows a Dupont jumper cut in half to make a pigtail.">
+
+      <!-- ESP32 board -->
+      <rect x="40" y="70" width="180" height="400" rx="6" class="d-box-warm"/>
+      <text x="58" y="100" class="t-title">ESP32 board</text>
+      <text x="58" y="118" class="t-sub">seen from above</text>
+      <text x="58" y="430" class="t-note">male header pins down this</text>
+      <text x="58" y="445" class="t-note">edge — no solder here, ever</text>
+      <rect x="196" y="90" width="16" height="360" fill="var(--surface2)" stroke="var(--rule)"/>
+      <rect x="199" y="136" width="10" height="10" fill="var(--rule)"/>
+      <rect x="199" y="160" width="10" height="10" fill="var(--rule)"/>
+      <rect x="199" y="184" width="10" height="10" fill="var(--rule)"/>
+      <rect x="199" y="208" width="10" height="10" fill="var(--rule)"/>
+      <rect x="199" y="232" width="10" height="10" fill="var(--warm)"/>
+      <rect x="199" y="256" width="10" height="10" fill="var(--rule)"/>
+      <rect x="199" y="280" width="10" height="10" fill="var(--rule)"/>
+      <rect x="199" y="304" width="10" height="10" fill="var(--rule)"/>
+      <rect x="199" y="328" width="10" height="10" fill="var(--rule)"/>
+      <rect x="199" y="352" width="10" height="10" fill="var(--ink2)"/>
+      <rect x="199" y="376" width="10" height="10" fill="var(--rule)"/>
+      <rect x="199" y="400" width="10" height="10" fill="var(--rule)"/>
+      <text x="190" y="245" text-anchor="end" class="t-pin">GPIO 26</text>
+      <text x="190" y="365" text-anchor="end" class="t-num">GND</text>
+
+      <!-- male dupont housings plugged in -->
+      <rect x="214" y="230" width="34" height="14" rx="2" fill="var(--chip)"/>
+      <rect x="214" y="350" width="34" height="14" rx="2" fill="var(--chip)"/>
+      <text x="248" y="492" class="t-wire">the two black housings are female jumper ends — just pushed onto the pins, pull to remove</text>
+
+      <!-- GPIO wire to J1 -->
+      <path d="M248,237 C290,237 315,238 344,238" class="w-warm"/>
+      <!-- 330R -->
+      <line x1="356" y1="238" x2="380" y2="238" class="w-warm"/>
+      <rect x="380" y="225" width="90" height="26" rx="12" class="d-box-warm"/>
+      <text x="425" y="243" text-anchor="middle" class="t-title">330 Ω</text>
+      <path d="M470,238 C474,232 476,226 478,220" class="w-warm"/>
+      <!-- 10k: down from J1, body, then up to J3 -->
+      <path d="M350,244 L350,431 L360,431" class="w-warm"/>
+      <rect x="360" y="418" width="90" height="26" rx="12" class="d-box-warm"/>
+      <text x="405" y="436" text-anchor="middle" class="t-title">10 kΩ</text>
+      <path d="M450,431 C468,422 474,364 477,312" class="w-warm"/>
+      <!-- GND wire to J3 -->
+      <path d="M248,357 C330,357 424,332 470,310" class="w-gnd"/>
+
+      <!-- PC817 legs + body -->
+      <rect x="482" y="210" width="44" height="10" fill="var(--metal)"/>
+      <rect x="482" y="300" width="44" height="10" fill="var(--metal)"/>
+      <rect x="630" y="210" width="44" height="10" fill="var(--metal)"/>
+      <rect x="630" y="300" width="44" height="10" fill="var(--metal)"/>
+      <rect x="526" y="196" width="104" height="128" rx="4" fill="var(--chip)" stroke="var(--rule)" stroke-width="1.5"/>
+      <circle cx="542" cy="214" r="5" fill="var(--chip-ink)"/>
+      <text x="578" y="266" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="14" font-weight="600" fill="var(--chip-ink)">PC817</text>
+      <text x="556" y="220" font-family="IBM Plex Mono, monospace" font-size="11" fill="var(--chip-ink)">1</text>
+      <text x="556" y="312" font-family="IBM Plex Mono, monospace" font-size="11" fill="var(--chip-ink)">2</text>
+      <text x="594" y="220" font-family="IBM Plex Mono, monospace" font-size="11" fill="var(--chip-ink)">4</text>
+      <text x="594" y="312" font-family="IBM Plex Mono, monospace" font-size="11" fill="var(--chip-ink)">3</text>
+
+      <!-- flying leads to remote -->
+      <path d="M684,215 C712,215 726,232 758,248" class="w-cool"/>
+      <path d="M684,305 C712,305 726,320 758,328" class="w-cool"/>
+      <text x="734" y="356" text-anchor="end" class="t-wire">thin flying leads — length to suit the box</text>
+
+      <!-- solder joints + heat-shrink -->
+      <rect x="330" y="226" width="40" height="24" rx="10" class="shrink"/>
+      <circle cx="350" cy="238" r="6" class="solder"/>
+      <text x="350" y="272" text-anchor="middle" class="t-num">J1</text>
+      <rect x="462" y="205" width="36" height="24" rx="10" class="shrink"/>
+      <circle cx="479" cy="216" r="6" class="solder"/>
+      <text x="470" y="196" text-anchor="middle" class="t-num">J2</text>
+      <rect x="458" y="294" width="40" height="24" rx="10" class="shrink"/>
+      <circle cx="478" cy="305" r="6" class="solder"/>
+      <text x="452" y="336" text-anchor="middle" class="t-num">J3</text>
+      <rect x="662" y="204" width="34" height="22" rx="10" class="shrink"/>
+      <circle cx="678" cy="215" r="6" class="solder"/>
+      <text x="678" y="196" text-anchor="middle" class="t-num">J4</text>
+      <rect x="662" y="294" width="34" height="22" rx="10" class="shrink"/>
+      <circle cx="678" cy="305" r="6" class="solder"/>
+      <text x="678" y="336" text-anchor="middle" class="t-num">J5</text>
+
+      <!-- remote -->
+      <rect x="740" y="150" width="170" height="330" rx="6" class="d-box-cool"/>
+      <text x="756" y="180" class="t-title">remote PCB</text>
+      <text x="756" y="198" class="t-sub">in the opened shell</text>
+      <circle cx="772" cy="250" r="10" fill="var(--surface2)" stroke="var(--cool)" stroke-width="2"/>
+      <circle cx="772" cy="250" r="5" class="solder"/>
+      <text x="792" y="255" class="t-pinc">pad 4 · P+</text>
+      <circle cx="772" cy="330" r="10" fill="var(--surface2)" stroke="var(--cool)" stroke-width="2"/>
+      <circle cx="772" cy="330" r="5" class="solder"/>
+      <text x="792" y="335" class="t-pinc">pad 5 · P−</text>
+      <text x="756" y="372" class="t-note">two joints on one switch —</text>
+      <text x="756" y="387" class="t-note">the only solder on the remote</text>
+      <rect x="756" y="410" width="140" height="40" rx="3" class="d-box"/>
+      <text x="826" y="434" text-anchor="middle" class="t-sub">battery — untouched</text>
+
+      <!-- inset: cutting a jumper -->
+      <text x="60" y="530" class="t-sub">making a pigtail (once per hookup):</text>
+      <rect x="60" y="548" width="36" height="16" rx="2" fill="var(--chip)"/>
+      <path d="M96,556 C136,556 160,556 202,556" stroke="var(--warm)" stroke-width="2.5" fill="none"/>
+      <line x1="208" y1="546" x2="220" y2="566" stroke="var(--danger)" stroke-width="2"/>
+      <line x1="220" y1="546" x2="208" y2="566" stroke="var(--danger)" stroke-width="2"/>
+      <path d="M226,556 C250,556 258,556 274,556" stroke="var(--ink2)" stroke-width="2.5" fill="none" opacity=".45"/>
+      <rect x="274" y="548" width="36" height="16" rx="2" fill="var(--metal)" opacity=".5"/>
+      <text x="60" y="596" class="t-note">cut an M-F jumper in half: the female half pushes onto the board's pins, its cut</text>
+      <text x="60" y="611" class="t-note">end gets stripped and soldered · the male half is a spare (v2's reed sensor)</text>
+
+      <!-- legend -->
+      <circle cx="560" cy="556" r="6" class="solder"/>
+      <text x="576" y="561" class="t-note">solder joint — seven in the whole build</text>
+      <rect x="548" y="578" width="30" height="16" rx="8" class="shrink"/>
+      <text x="586" y="591" class="t-note">heat-shrink sleeve over the joint</text>
+    </svg>
+  </div>
+  <figcaption><b>The same six wires, as they are actually built.</b> Two plugged jumpers on the left, seven soldered joints in the middle and right, heat-shrink over everything. The mid-air assembly is small enough to tuck beside the remote in the box.</figcaption>
+</figure>
+
+<div class="tablewrap">
+  <table>
+    <thead><tr><th>Joint</th><th>What melts together</th><th>Notes</th></tr></thead>
+    <tbody>
+      <tr><td class="pt sideA">J1</td><td>GPIO-26 pigtail's cut end + one leg of the 330 Ω + one leg of the 10 kΩ</td><td>The three-way joint. Twist the legs together first, then solder once.</td></tr>
+      <tr><td class="pt sideA">J2</td><td>330 Ω other leg + PC817 pin 1</td><td>Pin 1 is the corner with the dot.</td></tr>
+      <tr><td class="pt sideA">J3</td><td>GND pigtail's cut end + 10 kΩ other leg + PC817 pin 2</td><td>The other three-way joint, directly below J2.</td></tr>
+      <tr><td class="pt sideB">J4</td><td>PC817 pin 4 + flying lead</td><td>This lead's far end becomes P+.</td></tr>
+      <tr><td class="pt sideB">J5</td><td>PC817 pin 3 + flying lead</td><td>This lead's far end becomes P−.</td></tr>
+      <tr><td class="pt sideB">P+</td><td>flying lead from pin 4 + <b>pad 4</b> of the enrolled switch</td><td>Bottom-right pad of the switch, the +12 V side. Second of the two remote joints.</td></tr>
+      <tr><td class="pt sideB">P−</td><td>flying lead from pin 3 + <b>pad 5</b> of the enrolled switch</td><td>Bottom-left pad of the switch. Do this one first — it is the easier reach.</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<section class="col">
+  <h2>At the remote: two joints, and where the wires go</h2>
+  <p>Everything on the ESP32 side is forgiving. The remote is not: its pads are a millimetre and a half long, they sit against a plastic switch body, and the board is fifteen years old with no replacement. The technique is preparation done in advance so each actual joint takes about one second of iron contact — and a wire route that keeps the leads off every plunger, because once the shell is back on, the rubber keypad presses down on whatever lies on top of a switch.</p>
+</section>
+
+<figure class="fig-half" style="max-width:700px">
+  <div class="scroller">
+    <svg viewBox="0 0 640 440" role="img" aria-label="The remote's board held nose up: a battery slot down the middle and four switches around it. The enrolled switch is the upper-left one, with two solder-blob holes just above it. Two leads leave its bottom pads, are hot-glued at the joints, taped to the board once, then run down the left margin between the board edge and the lower switch and leave at the foot end, never crossing a plunger.">
+      <text x="320" y="16" text-anchor="middle" class="t-note">nose · key-ring end</text>
+      <!-- board -->
+      <path d="M120,420 L120,200 Q120,120 200,70 L300,30 Q320,22 340,30 L440,70 Q520,120 520,200 L520,420 Z" class="d-box-cool"/>
+      <!-- battery slot -->
+      <rect x="280" y="150" width="80" height="230" rx="4" fill="var(--surface2)" stroke="var(--rule)" stroke-width="1.5"/>
+      <text x="320" y="260" text-anchor="middle" class="t-sub">12 V</text>
+      <text x="320" y="276" text-anchor="middle" class="t-sub">cell</text>
+      <!-- blob holes -->
+      <circle cx="148" cy="118" r="7" class="solder"/>
+      <circle cx="166" cy="106" r="7" class="solder"/>
+      <!-- other switches -->
+      <g>
+        <rect x="415" y="140" width="50" height="50" rx="3" fill="var(--metal)" stroke="var(--rule)" stroke-width="1.5" opacity=".8"/>
+        <circle cx="440" cy="165" r="12" fill="var(--danger)" opacity=".6"/>
+        <rect x="175" y="300" width="50" height="50" rx="3" fill="var(--metal)" stroke="var(--rule)" stroke-width="1.5" opacity=".8"/>
+        <circle cx="200" cy="325" r="12" fill="var(--danger)" opacity=".6"/>
+        <rect x="415" y="300" width="50" height="50" rx="3" fill="var(--metal)" stroke="var(--rule)" stroke-width="1.5" opacity=".8"/>
+        <circle cx="440" cy="325" r="12" fill="var(--danger)" opacity=".6"/>
+      </g>
+      <!-- enrolled switch -->
+      <text x="228" y="124" text-anchor="middle" class="t-pinc">enrolled switch</text>
+      <rect x="180" y="131" width="10" height="7" class="pad-a"/>
+      <rect x="195" y="131" width="10" height="7" class="pad-case"/>
+      <rect x="210" y="131" width="10" height="7" class="pad-b"/>
+      <rect x="175" y="140" width="50" height="50" rx="3" fill="var(--metal)" stroke="var(--cool)" stroke-width="2.5"/>
+      <circle cx="200" cy="165" r="12" fill="var(--danger)" opacity=".85"/>
+      <rect x="180" y="192" width="10" height="7" class="pad-a"/>
+      <rect x="210" y="192" width="10" height="7" class="pad-b"/>
+      <text x="176" y="212" text-anchor="end" class="t-num">5</text>
+      <text x="224" y="212" class="t-num">4</text>
+      <!-- leads -->
+      <path d="M185,199 L185,214 C185,236 150,232 150,258 L150,420" class="w-cool"/>
+      <path d="M215,199 L215,220 C215,246 160,240 160,262 L160,420" class="w-cool"/>
+      <!-- glue -->
+      <ellipse cx="200" cy="206" rx="30" ry="13" class="glue"/>
+      <line x1="116" y1="206" x2="170" y2="206" stroke="var(--ink2)" stroke-width="1" stroke-dasharray="3 2"/>
+      <text x="112" y="200" text-anchor="end" class="t-note">hot glue over</text>
+      <text x="112" y="214" text-anchor="end" class="t-note">both joints and</text>
+      <text x="112" y="228" text-anchor="end" class="t-note">5 mm of lead</text>
+      <!-- tape -->
+      <rect x="136" y="266" width="34" height="20" rx="2" class="tape"/>
+      <text x="178" y="280" class="t-note">tape — strain relief</text>
+      <!-- exit -->
+      <text x="155" y="434" text-anchor="middle" class="t-note">out through the seam</text>
+      <!-- notes -->
+      <text x="440" y="384" text-anchor="middle" class="t-note">the other three plungers:</text>
+      <text x="440" y="398" text-anchor="middle" class="t-note">no lead ever crosses one</text>
+      <text x="320" y="412" text-anchor="middle" class="t-note">the keypad presses down on whatever lies on a switch</text>
+    </svg>
+  </div>
+  <figcaption><b>Where things sit, nose up.</b> The leads leave pads 4 and 5 downward, get a blob of hot glue over the joints, are taped to the board a few centimetres on, and run down the left margin between the board edge and the lower switch to leave at the foot end. If the board goes into the project box without its shell, tape it flat to the box wall instead and skip the seam notch — the rule is the same either way: nothing rests on a plunger. The lower switch stays on the board: removing it for elbow room would need hot air to do cleanly, risks the pads and traces next to the switch you need, and — until the new remote is enrolled — may disable the two-button hidden-key combination this remote uses as the programming key.</figcaption>
+</figure>
+
+<section class="col">
+  <h3>The two pad joints, step by step</h3>
+  <ol class="steps">
+    <li><b>Battery out.</b> Tape the board by its edges to a piece of cardboard, nose up, enrolled switch toward you. Good light; a magnifier or the phone camera zoomed in if you have one.</li>
+    <li><b>Iron at about 330 °C</b> with a fine tip, freshly cleaned and tinned. Leaded 0.8 mm rosin-core solder flows at lower heat — use it if you have it.</li>
+    <li><b>Make the two leads.</b> 10–15 cm each of the 26–28 AWG stranded wire, two colours — <b>red for pad 4</b>, dark for pad 5. That colour is the polarity marker for the rest of the build. Strip 2 mm, twist the strands, flux, tin until the strands are one solid shiny stub, then <b>trim the stub to 1.5 mm</b> — no longer than the pad, or it overhangs and bridges. Slide the heat-shrink for J4/J5 onto the leads now.</li>
+    <li><b>Prepare the pads.</b> Isopropyl on a cotton bud over the switch area, then flux on pads 4 and 5. Add no solder: the pads already carry the factory solder, and that is all a joint this size needs.</li>
+    <li><b>Pad 5 first.</b> Lay the stub flat on the pad, pointing straight down the board, away from the switch body. Hold the lead with tweezers, or tape it to the board 2 cm back so both hands are free. Touch the iron to the stub and the pad together: within about one second the pad's solder melts and flows up around the stub. Lift straight up, hold the lead still for two seconds. <b>Never more than two seconds</b> of contact — the switch terminals sit in plastic.</li>
+    <li><b>Look at it.</b> Good: shiny, concave, the stub sunk into the fillet. Bad: a dull grainy ball sitting on top — reflux and touch once more. Let it cool ten seconds.</li>
+    <li><b>Pad 4 the same way,</b> stub pointing down and to the right so the two leads diverge. Keep the stub and the iron clear of the switch's metal shell — it is the same metal as pad 2.</li>
+    <li><b>If a pad lifts, stop.</b> Do not rework it. Pad 3 is the same net as 4, pad 1 the same as 5: move that lead to the spare pad. Desoldering braid takes off a blob or a bridge.</li>
+    <li><b>Clean and check, battery out.</b> Isopropyl over both joints. Then continuity, probing only the bare lead ends and the untouched pads — never the fresh joints: red lead ↔ pad 3 beeps, dark lead ↔ pad 1 beeps (both joints conduct); red ↔ dark is silent, and beeps when the plunger is pressed; neither lead beeps to pad 2.</li>
+    <li><b>Check, battery in.</b> Red probe on the red lead, black on the dark lead: the same +12 V as across the pads. Press the plunger — the door must still respond, and nothing may happen without a press.</li>
+    <li><b>Lock it down.</b> A small blob of hot glue over each joint and the first 5 mm of lead; tape the leads to the board a few centimetres on. A tug now pulls on the glue and tape, not on the pad. Route as in the figure.</li>
+  </ol>
+</section>
+
+<section class="col">
+  <h2>Four ways to wreck this</h2>
   <p>Read these before step 01. Each one is cheap to avoid and expensive to undo.</p>
 </section>
 <div class="stops">
   <div class="stop">
     <div class="tag">Order of work</div>
-    <h3>Don't open the old remote yet</h3>
-    <p>The old remote is the programming key for enrolling the new one. Enroll the MITTO COOL C2 first and confirm it works on the door. Only then does the old one become a component.</p>
+    <h3>Don't kill the programming key</h3>
+    <p>Until the new MITTO COOL C2 is enrolled, this remote is the only key that can enroll it. Soldering leaves it working; a cooked switch or a torn pad might not. Iron contact under two seconds, and a damaged pad means moving to its spare (3 for 4, 1 for 5), not reworking it.</p>
   </div>
   <div class="stop">
     <div class="tag">Not optional</div>
@@ -389,30 +666,37 @@ a{color:var(--warm);}
   </div>
   <div class="stop">
     <div class="tag">Directional</div>
-    <h3>Don't guess the pad polarity</h3>
-    <p>PC817 pins 4 and 3 conduct one way only. Wired backwards, everything looks correct and the button never presses — hours of chasing a fault that is a swapped pair of wires.</p>
+    <h3>Pin 4 to pad 4, pin 3 to pad 5</h3>
+    <p>Measured, not guessed: pad 4 is the +12 V side. PC817 pins 4 and 3 conduct one way only — wired backwards, everything looks correct and the button never presses, hours of chasing a fault that is a swapped pair of wires.</p>
+  </div>
+  <div class="stop">
+    <div class="tag">Bare metal</div>
+    <h3>Nothing touches pad 2</h3>
+    <p>The middle pad on the switch's top edge is its metal shell, and the shell wraps the whole body. A lead, a solder whisker or a slipped iron tip on it shorts an unknown net. Both joints are on the bottom edge; the top edge stays untouched.</p>
   </div>
 </div>
 
 <section class="col">
   <h2>Build order</h2>
   <ol class="steps">
-    <li><b>Enroll the new remote.</b> MITTO COOL C2, using the old remote as the programming key. Test it on the door several times. Nothing gets opened before this is solid.</li>
+    <li><b>Enroll the new remote.</b> MITTO COOL C2, using the old remote as the programming key. Test it on the door several times. Nothing else in this list depends on it, but the old remote must survive everything below until this is done.</li>
     <li><b>Range-check the old remote</b> from the spot where the ESP32 will live. If the door doesn't respond from there, the mounting spot moves — not the plan.</li>
-    <li><b>Open the old remote.</b> Photograph the board, note the battery type, buy a spare.</li>
-    <li><b>Measure the pads.</b> DC volts across them, find +, mark it. (Figure above.)</li>
-    <li><b>Build the small assembly.</b> PC817 with the 330 Ω on pin 1 and the 10 kΩ across the GPIO/GND leads, soldered directly onto the flying leads. Heat-shrink every joint — no perfboard needed.</li>
-    <li><b>Jumper it into the ESP32.</b> Male-to-female Dupont wires into the board's existing sockets. Never solder the ESP32 itself.</li>
-    <li><b>Solder the two thin wires to the pads.</b> Pin 4 to +, pin 3 to −. Fine tip, flux, clean the flux off afterwards with isopropyl.</li>
+    <li><b>Open the old remote — done 2026-09-03.</b> Board photographed (media/remote/), the cell is a single 12 V cylinder: buy a spare. The door's step logic was confirmed at the same time: closed → opens, open → closes, moving → stops, stopped mid-travel → reverses.</li>
+    <li><b>Measure the pads — done 2026-09-03.</b> Pad map in the switch figure: pin 4 → pad 4 (+12 V), pin 3 → pad 5. Repeat the one reading before soldering: red on pad 4, black on pad 5, positive. The switched current was not measured; a remote's button feeds a logic input, microamps against the PC817's 50 mA limit. Measure it if the meter has a µA range, otherwise accept.</li>
+    <li><b>Build the small assembly — done 2026-09-01.</b> PC817 with the 330 Ω on pin 1 and the 10 kΩ across the GPIO/GND leads, dead-bug soldered onto the pigtails and bench-verified. Still owed: a wiggle test on each joint, and sleeving the two bare GPIO-node leads.</li>
+    <li><b>Solder the two leads to pads 5 and 4.</b> The step list in "At the remote" above, in that order. Then the two meter checks, the hot glue, the tape.</li>
+    <li><b>Join leads to the PC817.</b> Red lead to pin 4 (J4), dark lead to pin 3 (J5), heat-shrink over both. Battery in, ESP32 still unplugged: the plunger works the door, nothing happens on its own.</li>
+    <li><b>Jumper it onto the ESP32.</b> The pigtails' female ends push straight onto the board's male header pins — GPIO 26 and GND. The board has several GND pins and they are all the same point electrically: use the one on the same side as GPIO 26 so both connectors sit on one edge. Never solder the ESP32 itself.</li>
+    <li><b>Flash the beacon-aware production build.</b> <code style="font-family:var(--mono);font-size:14px">pio run -e v1-ble -t upload</code>. Plain <code style="font-family:var(--mono);font-size:14px">v1</code> watches only the classic radio, which the logger weeks proved cannot see an arrival.</li>
     <li><b>Power up in DRY-RUN.</b> The firmware boots there by default and only logs. Watch it for a session before touching the mode.</li>
-    <li><b>First real press, supervised.</b> Stand at the door, working remote in hand, and use the manual pulse. A press is a step command — be ready to correct it.</li>
-    <li><b>Box it up.</b> ESP32 and remote in one small box, one hole for the USB cable, nothing pressing on the remote's own button.</li>
+    <li><b>First real press, supervised.</b> Start with the door closed. Stand at the door, working remote in hand, and use the manual pulse. A press is a step command: closed opens, open closes, moving stops — be ready to correct it. Door ignores the press → lengthen the pulse; double-triggers → shorten it.</li>
+    <li><b>Box it up.</b> ESP32 and remote in one small box, one hole for the USB cable, nothing pressing on any of the remote's four plungers.</li>
   </ol>
 </section>
 
 <hr>
 <section class="col">
-  <p class="t-note" style="font-size:14px;color:var(--ink2)">Companion to <b>COMPONENTS.md</b> and <b>PLAN.md</b>. Build v1 is deliberately minimal: no door sensor, arrival only, and the door keeps its normal remotes and physical key as fallback throughout.</p>
+  <p class="t-note" style="font-size:14px;color:var(--ink2)">Companion to <b>COMPONENTS.md</b> and <b>PLAN.md</b>. Build v1 is deliberately minimal: no door sensor, arrival only, and the door keeps its normal remotes and physical key as fallback throughout. Remote pad map and polarity measured 2026-09-03; assembly bench-verified 2026-09-01.</p>
 </section>
 
 </div>

@@ -662,7 +662,7 @@ static const char *modeName(RunMode m) {
   return "?";
 }
 
-static void doPulse(const char *source) {
+static void doPulse(const char *source, uint32_t ms = PULSE_MS) {
 #if REED_ENABLED
   if (digitalRead(PIN_REED) != LOW) {
     logEvent("PULSE", String("REFUSED (") + source + "): reed says door not closed");
@@ -673,17 +673,34 @@ static void doPulse(const char *source) {
   prefs.putUInt("pulses", pulseCount);
   lastPulseInfo = tsNow() + " (" + source + ")";
   logEvent("PULSE", String("*** PULSING REMOTE *** (") + source + ", " +
-                        String((unsigned)PULSE_MS) + "ms on GPIO " + String(PIN_PULSE) + ")");
+                        String((unsigned)ms) + "ms on GPIO " + String(PIN_PULSE) + ")");
+  // Load self-test: float the pin on its ~45k internal pull-up for a moment.
+  // The opto LED path (330R + LED to GND) drags it below the input threshold;
+  // if it stays HIGH, nothing is connected (loose jumper, open joint).
+  pinMode(PIN_PULSE, INPUT_PULLUP);
+  delayMicroseconds(300);
+  bool loaded = digitalRead(PIN_PULSE) == LOW;
+  pinMode(PIN_PULSE, OUTPUT);
   digitalWrite(PIN_PULSE, HIGH);
   pulseActive = true;
-  pulseOffAtMs = millis() + PULSE_MS;
+  pulseOffAtMs = millis() + ms;
+  logEvent("PULSE", String("load check: pin ") + PIN_PULSE +
+                        (loaded ? " pulled LOW on its weak pull-up — opto LED path is connected"
+                                : " floats HIGH on its weak pull-up — NOTHING connected to the pin"));
+  // Arduino OUTPUT (0x03) keeps the input buffer on, so this reads the real
+  // pad level: LOW here means the pin is held down externally or dead.
+  delayMicroseconds(100);
+  logEvent("PULSE", String("GPIO ") + PIN_PULSE + " pad reads back " +
+                        (digitalRead(PIN_PULSE) ? "HIGH" : "LOW") + " while driven HIGH");
 }
 
 static void pulseTick() {
   if (pulseActive && (int32_t)(millis() - pulseOffAtMs) >= 0) {
+    bool pad = digitalRead(PIN_PULSE);
     digitalWrite(PIN_PULSE, LOW);
     pulseActive = false;
-    logEvent("PULSE", "pulse complete, output LOW");
+    logEvent("PULSE", String("pulse complete, output LOW (pad read ") +
+                          (pad ? "HIGH" : "LOW") + " just before release)");
   }
 }
 
@@ -1030,9 +1047,14 @@ static void handleRoot() {
 #endif
   h += "</p>";
 #if PULSE_ENABLED
+#if WEB_CONTROLS_NEED_TOKEN
   if (strcmp(CONTROL_TOKEN, "change-me-too") == 0)
     h += F("<p class=fired>⚠ CONTROL_TOKEN is still the placeholder — web controls "
            "are refused until config.h gets a real token.</p>");
+#else
+  h += F("<p class=fired>⚠ web controls are OPEN — no token asked (WEB_CONTROLS_NEED_TOKEN 0 "
+         "in tunables.h, bench build). Anyone on this WiFi can pulse the remote.</p>");
+#endif
 #endif
 
   if (carMacIsPlaceholder)
@@ -1099,8 +1121,15 @@ static void handleRoot() {
   h += F("</table>");
 
 #if PULSE_ENABLED
-  h += F("<fieldset><legend>controls (token required)</legend>"
-         "<form method=POST action=/mode>token <input type=password name=token size=10> "
+#if WEB_CONTROLS_NEED_TOKEN
+#define TOKEN_FIELD "token <input type=password name=token size=10> "
+#define CONTROLS_LEGEND "controls (token required)"
+#else
+#define TOKEN_FIELD ""
+#define CONTROLS_LEGEND "controls (OPEN — bench build)"
+#endif
+  h += F("<fieldset><legend>" CONTROLS_LEGEND "</legend>"
+         "<form method=POST action=/mode>" TOKEN_FIELD
          "<select name=mode>");
   h += String("<option value=disabled") + (runMode == RunMode::Disabled ? " selected" : "") +
        ">DISABLED</option><option value=dryrun" + (runMode == RunMode::DryRun ? " selected" : "") +
@@ -1108,8 +1137,10 @@ static void handleRoot() {
        ">LIVE</option>";
   h += F("</select> <button>set mode</button></form>"
          "<form method=POST action=/pulse onsubmit=\"return confirm('Pulse the remote — "
-         "the door WILL move. Sure?')\">token <input type=password name=token size=10> "
-         "<button>manual pulse (commissioning)</button></form></fieldset>");
+         "the door WILL move. Sure?')\">" TOKEN_FIELD
+         "hold <input type=number name=ms min=50 max=20000 size=5 value=");
+  h += String((unsigned)PULSE_MS);
+  h += F("> ms <button>open door (manual pulse)</button></form></fieldset>");
 #endif
   h += F("<form method=POST action=/mark><input name=note placeholder='e.g. real arrival now' "
          "maxlength=80> <button>Mark in log</button></form>"
@@ -1168,6 +1199,9 @@ static void handleTail() {
 
 #if PULSE_ENABLED
 static bool tokenOk() {
+#if !WEB_CONTROLS_NEED_TOKEN
+  return true;  // bench mode, see tunables.h
+#endif
   if (strcmp(CONTROL_TOKEN, "change-me-too") == 0) {
     logEvent("ERR", "control refused: CONTROL_TOKEN still placeholder in config.h");
     return false;
@@ -1212,9 +1246,16 @@ static void handleManualPulse() {
   if (runMode == RunMode::Disabled) {
     logEvent("PULSE", "manual pulse refused: mode is DISABLED");
   } else {
-    logEvent("PULSE", "manual pulse requested via web (commissioning, from " +
-                          server.client().remoteIP().toString() + ")");
-    doPulse("manual/web");
+    // Commissioning aid: an optional hold length (50..20000 ms) so the output
+    // can be metered stage by stage; the auto path always uses PULSE_MS.
+    uint32_t ms = PULSE_MS;
+    if (server.hasArg("ms")) {
+      long v = server.arg("ms").toInt();
+      ms = (uint32_t)(v < 50 ? 50 : (v > 20000 ? 20000 : v));
+    }
+    logEvent("PULSE", "manual pulse requested via web (commissioning, " + String((unsigned)ms) +
+                          "ms, from " + server.client().remoteIP().toString() + ")");
+    doPulse("manual/web", ms);
     // door state is unknown after any pulse — same lockout as an auto fire
     endEncounter("manual pulse");
     setState(SysState::DisarmedLockout, "manual pulse");

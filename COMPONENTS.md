@@ -42,8 +42,9 @@ GPIO 26 is a non-strapping pin — safe on boot. Avoid 0, 2, 5, 12, 15.
 
 Total: **under €10.** Resistors: cheapest as a small E12 assortment box (~€6)
 if none on hand. No perfboard needed for v1 — opto + two resistors can be
-soldered "dead-bug" onto the flying leads, heat-shrunk, and jumpered to the
-ESP32's female headers. Never solder the ESP32 board itself.
+soldered "dead-bug" onto the flying leads, heat-shrunk, and jumpered onto the
+ESP32's male header pins (the board has male pins — the jumpers' female ends
+push onto them). Never solder the ESP32 board itself.
 
 ## Tools (check what you already have)
 

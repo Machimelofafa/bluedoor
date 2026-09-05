@@ -143,8 +143,20 @@ BT sighting ─▶ state machine ─▶ strict verdict ─▶ run-mode gate ─�
   `setup()`; the 10 kΩ hardware pulldown covers the boot-ROM window. A
   boot/reset/flash cycle can never press the button.
 - **Manual pulse** (commissioning): token-gated button on the page, refused
-  in DISABLED mode. Any pulse — auto or manual — enters the same lockout,
-  since the door state is unknown afterwards.
+  in DISABLED mode. Its "hold" field (50–20000 ms, default `PULSE_MS`) is a
+  bench aid: a 3000 ms hold is long enough to meter GPIO 26, the PC817 LED
+  and the remote pads stage by stage. The auto path always uses `PULSE_MS`.
+  Any pulse — auto or manual — enters the same lockout, since the door state
+  is unknown afterwards. Every pulse logs a **pad read-back** and a **load
+  check** (the pin is floated on its weak pull-up for a moment; the opto LED
+  path must drag it LOW — `NOTHING connected` means a loose jumper or an open
+  joint). `WEB_CONTROLS_NEED_TOKEN 0` in tunables.h drops the token for bench
+  work; the page shows a red banner while it is off.
+- **Rolling code:** the MITTO is a KeeLoq-style transmitter. Pulses the door
+  cannot hear still advance its counter; past 16 unheard presses the receiver
+  wants two *consecutive* presses to resync. So run pulse tests within range,
+  and never turn an arrival pulse into a double pulse — BFT step logic makes
+  the second press a *stop*. Resync is a manual action only.
 - **Reed interlock (v2)** is compiled in but stubbed: `REED_ENABLED 0` in
   tunables.h. Fitting the sensor later = wire GPIO 27, flip to 1, rebuild.
 - Everything the logger logs, v1 still logs (PLAN.md: "log everything").
@@ -165,7 +177,7 @@ BT sighting ─▶ state machine ─▶ strict verdict ─▶ run-mode gate ─�
 |---|---|---|---|
 | 1 | Strict ramp rule (≥3 sightings, ≥6 dB rise, crossing −80 dBm) catches every real arrival | `tunables.h` | logger week shows real arrivals with `RELAXED` but no strict `VERDICT` → relax ramp, lean on interlocks (PLAN.md) |
 | 2 | −80 dBm (classic) / −90 dBm (beacon) is the right proximity threshold from the chosen mounting spot | `RSSI_TRIGGER_DBM` | logged approach RSSI curves peak lower/higher |
-| 3 | 250 ms reads as one clean button press on the MITTO 12V-UP | `PULSE_MS` | commissioning: door ignores it (lengthen) or double-triggers (shorten) |
+| 3 | ~~250 ms reads as one clean button press on the MITTO 12V-UP~~ **Confirmed 2026-09-05**: four 250 ms pulses beside the door, four openings | `PULSE_MS` | — |
 | 4 | 5.12 s inquiry cycles are fast enough to catch a driving approach | `INQ_LEN_UNITS` | arrivals appear as 1–2 sightings only → shorten cycles |
 | 5 | Lockout-until-full-away is an acceptable re-arm policy | state machine | legitimate same-hour second arrivals get eaten → add time-based cooldown path |
 | 6 | The sleeping head unit does NOT answer page probes (so probes can't guard wake-in-place) | `PROBE_*` | logger shows `PROBE` answers while parked → add page-presence guard before arming |

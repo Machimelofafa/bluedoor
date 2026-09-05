@@ -54,12 +54,22 @@
 #define SCAN_STUCK_MS          (120u * 1000u)
 
 // ---- actuation (v1 builds only; PULSE_ENABLED comes from platformio.ini) ----
-// Wiring per COMPONENTS.md: GPIO 26 -> 330R -> PC817 LED, PC817 output across
-// the remote's button pads. GPIO 26 is non-strapping; the 10k hardware
-// pulldown on the opto drive is NOT optional.
+// Wiring per COMPONENTS.md: pulse pin -> 330R -> PC817 LED, PC817 output across
+// the remote's button pads. Non-strapping pin; the 10k hardware pulldown on
+// the opto drive is NOT optional.
+// 2026-09-05 bench note: a loose Dupont contact once made pin 26 look dead
+// (chip read its pad HIGH, header pin metered 0 V). The pin is fine; every
+// pulse logs a pad read-back and a load check for that kind of hunt.
 #define PIN_PULSE              26
-// HYPOTHESIS: 250 ms reads as a clean button press on the MITTO 12V-UP.
-// Verify at commissioning; some boards want a longer press.
+// Web controls (mode switch, manual pulse) normally demand CONTROL_TOKEN from
+// config.h. 0 = no token asked and no token fields on the page — bench work on
+// a trusted LAN only; the page shows a red banner while this is 0. Set back to
+// 1 before the scanner returns to the garage. (2026-09-05: 0 for the bench
+// hunt, back to 1 for the garage install the same day.)
+#define WEB_CONTROLS_NEED_TOKEN 1
+// CONFIRMED 2026-09-05: four 250 ms pulses beside the door, four openings.
+// (From two floors up the LED lit but the door stayed shut — range and/or
+// rolling-code counter drift; see README. Test pulses within earshot.)
 #define PULSE_MS               250u
 // v2 reed door-closed interlock — stubbed off in v1 (PLAN.md).
 // When fitted: alarm-type contact GPIO 27 -> GND, internal pullup,
