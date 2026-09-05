@@ -6,7 +6,7 @@ advertiser ([src/beacon.cpp](src/beacon.cpp)), five build targets
 
 | Target | What it is | Output |
 |---|---|---|
-| `logger` | **Phase 0.5** one-week "would-open" logger. Full arrival pipeline from [PLAN.md](../PLAN.md), but the only output is the log — no GPIO is ever driven, nothing is wired. | verdicts in the log only |
+| `logger` | **Phase 0.5** one-week "would-open" logger. Full arrival pipeline from [README.md](../README.md), but the only output is the log — no GPIO is ever driven, nothing is wired. | verdicts in the log only |
 | `v1` | **Production.** Same pipeline; a strict arrival verdict can additionally pulse GPIO 26 → PC817 optocoupler → the sacrificial remote's button ([COMPONENTS.md](../COMPONENTS.md) wiring). | log + real button press |
 | `logger-ble` | Same logger, but the radio layer watches a **BLE beacon carried in the car** instead of the car's own head unit. Needs `BEACON_BLE_MAC` in config.h; until it's filled in, the `SURVEY` census still logs everything heard. | verdicts in the log only |
 | `survey` | `logger-ble` plus classic inquiry: the census hears both radios at once, for attended drive-through tests. Runs the coex mix that crashes the controller (see design notes) — **never leave it running unattended**; reflash `logger-ble` after each session. | census in the log |
@@ -76,8 +76,9 @@ opening during the descent.
 
 1. Edit [include/config.h](include/config.h) (gitignored — car MAC, WiFi
    credentials and tokens never enter git): fill in `WIFI_SSID`, `WIFI_PASS`,
-   `OTA_PASSWORD`, and for v1 a real `CONTROL_TOKEN`. The car MAC is already
-   set. (Fresh checkout? Copy `config.example.h` to `config.h` first.)
+   `OTA_PASSWORD`, for v1 a real `CONTROL_TOKEN`, and the address the scanner
+   watches — `CAR_BT_MAC` for the classic-radio builds, `BEACON_BLE_MAC` for the
+   beacon builds. (Fresh checkout? Copy `config.example.h` to `config.h` first.)
 2. Detection thresholds and actuation parameters live in
    [include/tunables.h](include/tunables.h) — start values are hypotheses,
    tuned from logger-week data.
@@ -121,7 +122,7 @@ If USB upload fails with a permission error, add yourself to `dialout`
 - Every boot starts DISARMED until a 10-min car-free period; verdict counters
   persist across reboots (NVS).
 
-**Pass criteria (PLAN.md):** every real arrival (`MARK`) has a matching
+**Pass criteria:** every real arrival (`MARK`) has a matching
 strict `VERDICT`; zero strict `VERDICT`s without one — wake-in-place must
 show as `REFUSE`, reboots covered by boot-disarm, neighbors by the MAC
 filter. Only then buy Stage 2.
@@ -159,9 +160,9 @@ BT sighting ─▶ state machine ─▶ strict verdict ─▶ run-mode gate ─�
   the second press a *stop*. Resync is a manual action only.
 - **Reed interlock (v2)** is compiled in but stubbed: `REED_ENABLED 0` in
   tunables.h. Fitting the sensor later = wire GPIO 27, flip to 1, rebuild.
-- Everything the logger logs, v1 still logs (PLAN.md: "log everything").
+- Everything the logger logs, v1 still logs ("log everything").
 
-### Commissioning sequence (maps to PLAN.md Phases 1–2)
+### Commissioning sequence (maps to README.md Phases 1–2)
 
 1. Solder per COMPONENTS.md (new remote enrolled first — old one is the
    programming key), flash `v1`.
@@ -175,7 +176,7 @@ BT sighting ─▶ state machine ─▶ strict verdict ─▶ run-mode gate ─�
 
 | # | Hypothesis | Where | Falsified if… |
 |---|---|---|---|
-| 1 | Strict ramp rule (≥3 sightings, ≥6 dB rise, crossing −80 dBm) catches every real arrival | `tunables.h` | logger week shows real arrivals with `RELAXED` but no strict `VERDICT` → relax ramp, lean on interlocks (PLAN.md) |
+| 1 | Strict ramp rule (≥3 sightings, ≥6 dB rise, crossing −80 dBm) catches every real arrival | `tunables.h` | logger week shows real arrivals with `RELAXED` but no strict `VERDICT` → relax ramp, lean on interlocks |
 | 2 | −80 dBm (classic) / −90 dBm (beacon) is the right proximity threshold from the chosen mounting spot | `RSSI_TRIGGER_DBM` | logged approach RSSI curves peak lower/higher |
 | 3 | ~~250 ms reads as one clean button press on the MITTO 12V-UP~~ **Confirmed 2026-09-05**: four 250 ms pulses beside the door, four openings | `PULSE_MS` | — |
 | 4 | 5.12 s inquiry cycles are fast enough to catch a driving approach | `INQ_LEN_UNITS` | arrivals appear as 1–2 sightings only → shorten cycles |
@@ -227,6 +228,6 @@ BT sighting ─▶ state machine ─▶ strict verdict ─▶ run-mode gate ─�
   never depends on WiFi.
 - Partition scheme `min_spiffs`: OTA stays possible, a 128 KB LittleFS holds
   ~2 weeks of logs across the two rotation files.
-- Security posture (PLAN.md): convenience-lock grade. Controls are LAN-only +
+- Security posture (see README.md): convenience-lock grade. Controls are LAN-only +
   token; a spoofed MAC still has to fake an approach ramp after a real away
   period. Physical remotes and key remain the fallback.

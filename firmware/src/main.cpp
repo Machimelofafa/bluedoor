@@ -2,14 +2,14 @@
 // build targets (platformio.ini):
 //
 //   logger (PULSE_ENABLED=0): Phase 0.5 one-week "would-open" logger. Full
-//     arrival pipeline from PLAN.md (classic BT inquiry + RSSI filter,
+//     arrival pipeline from README.md (classic BT inquiry + RSSI filter,
 //     boot-disarm, away threshold, approach signature, lockout) but the only
 //     output is a log: flash file + status web page. No GPIO is ever driven.
 //
 //   v1 (PULSE_ENABLED=1): production. Same pipeline; a strict verdict can
 //     additionally pulse GPIO 26 -> PC817 optocoupler -> sacrificial remote's
 //     button (COMPONENTS.md wiring). Run modes DISABLED / DRY-RUN / LIVE,
-//     persisted; boots into whatever was set, first boot = DRY-RUN (PLAN.md
+//     persisted; boots into whatever was set, first boot = DRY-RUN (README.md
 //     Phase 2: dry-run week first). Web controls are token-gated.
 //
 // Verdicts logged:

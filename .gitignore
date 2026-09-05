@@ -17,3 +17,7 @@ firmware/soak/*.log
 # move the car MAC into secrets.h and uncomment, and purge media/ from history
 # secrets.h
 # media/
+
+# Private working material — never published (history purged 2026-09-05)
+media/
+PLAN.md

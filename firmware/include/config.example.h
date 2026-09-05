@@ -1,6 +1,6 @@
 // Bluedoor — secrets & identity. Copy to config.h and fill in real values.
 // config.h is gitignored: the car MAC + WiFi credentials never enter git
-// (see PLAN.md "Data hygiene").
+// (see README.md, "Security and privacy").
 #pragma once
 
 #define WIFI_SSID       "your-wifi-ssid"

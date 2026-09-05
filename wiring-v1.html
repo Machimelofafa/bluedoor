@@ -384,7 +384,7 @@ a{color:var(--warm);}
       <text x="372" y="300" class="t-note">seen from above, remote held nose up</text>
     </svg>
   </div>
-  <figcaption><b>The enrolled switch, pad by pad.</b> Numbering follows the owner's sketch (photos in <b>media/remote/</b>). A tact switch has two contact groups; each group reaches two pads, which is why 1 and 5 beep unpressed and 3 and 4 beep unpressed. The fifth pad is the shell, which wraps the whole body — nothing may touch it.</figcaption>
+  <figcaption><b>The enrolled switch, pad by pad.</b> Numbering follows the owner's sketch. A tact switch has two contact groups; each group reaches two pads, which is why 1 and 5 beep unpressed and 3 and 4 beep unpressed. The fifth pad is the shell, which wraps the whole body — nothing may touch it.</figcaption>
 </figure>
 
 <figure class="fig-half" style="max-width:680px">
@@ -681,7 +681,7 @@ a{color:var(--warm);}
   <ol class="steps">
     <li><b>Enroll the new remote.</b> MITTO COOL C2, using the old remote as the programming key. Test it on the door several times. Nothing else in this list depends on it, but the old remote must survive everything below until this is done.</li>
     <li><b>Range-check the old remote</b> from the spot where the ESP32 will live. If the door doesn't respond from there, the mounting spot moves — not the plan.</li>
-    <li><b>Open the old remote — done 2026-09-03.</b> Board photographed (media/remote/), the cell is a single 12 V cylinder: buy a spare. The door's step logic was confirmed at the same time: closed → opens, open → closes, moving → stops, stopped mid-travel → reverses.</li>
+    <li><b>Open the old remote — done 2026-09-03.</b> Board photographed, the cell is a single 12 V cylinder: buy a spare. The door's step logic was confirmed at the same time: closed → opens, open → closes, moving → stops, stopped mid-travel → reverses.</li>
     <li><b>Measure the pads — done 2026-09-03.</b> Pad map in the switch figure: pin 4 → pad 4 (+12 V), pin 3 → pad 5. Repeat the one reading before soldering: red on pad 4, black on pad 5, positive. The switched current was not measured; a remote's button feeds a logic input, microamps against the PC817's 50 mA limit. Measure it if the meter has a µA range, otherwise accept.</li>
     <li><b>Build the small assembly — done 2026-09-01.</b> PC817 with the 330 Ω on pin 1 and the 10 kΩ across the GPIO/GND leads, dead-bug soldered onto the pigtails and bench-verified. Still owed: a wiggle test on each joint, and sleeving the two bare GPIO-node leads.</li>
     <li><b>Solder the two leads to pads 5 and 4.</b> The step list in "At the remote" above, in that order. Then the two meter checks, the hot glue, the tape.</li>
@@ -696,7 +696,7 @@ a{color:var(--warm);}
 
 <hr>
 <section class="col">
-  <p class="t-note" style="font-size:14px;color:var(--ink2)">Companion to <b>COMPONENTS.md</b> and <b>PLAN.md</b>. Build v1 is deliberately minimal: no door sensor, arrival only, and the door keeps its normal remotes and physical key as fallback throughout. Remote pad map and polarity measured 2026-09-03; assembly bench-verified 2026-09-01.</p>
+  <p class="t-note" style="font-size:14px;color:var(--ink2)">Companion to <b>COMPONENTS.md</b> and the project report, <b>README.md</b>. Build v1 is deliberately minimal: no door sensor, arrival only, and the door keeps its normal remotes and physical key as fallback throughout. Remote pad map and polarity measured 2026-09-03; assembly bench-verified 2026-09-01.</p>
 </section>
 
 </div>

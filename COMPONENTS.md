@@ -1,6 +1,6 @@
 # Bluedoor — electronics bill of materials & wiring map
 
-Companion to [PLAN.md](PLAN.md). Board: Freenove ESP32-WROOM (FNK0090),
+Companion to the project report, [README.md](README.md). Board: Freenove ESP32-WROOM (FNK0090),
 ordered 2026-08-22. **Build target: minimal v1 — ESP32 + old remote only, no
 door sensor** (decision 2026-08-22; reed interlock deferred to v2).
 
@@ -59,7 +59,7 @@ push onto them). Never solder the ESP32 board itself.
 ## v2 upgrade kit — OPTIONAL, only if v1's no-sensor behavior annoys
 
 Buy nothing here unless the door regularly gets closed-on-arrival because it
-was left open (see PLAN.md architecture note).
+was left open (see the architecture section of README.md).
 
 | Part | Qty | Notes | ~€ |
 |---|---|---|---|
@@ -70,15 +70,15 @@ was left open (see PLAN.md architecture note).
 | Small toggle switch (physical arm/disable) | 1 | optional nicety | 1 |
 | Perfboard ~5×7 cm + female header strips | 1+2 | tidier permanent assembly | 2 |
 
-## Not on this list (tracked in PLAN.md)
+## Not on this list (tracked in README.md)
 
 - Freenove ESP32-WROOM board — ordered 2026-08-22
 - BFT MITTO COOL C2 remote — Stage 2, after the logger week (becomes daily
   carry; the old MITTO 12V-UP gets the soldering)
-- Old remote's spare battery — type TBD, note it when the remote is opened
+- Old remote's spare battery — a single 12 V cylindrical cell (23A/MN21 family), confirmed 2026-09-03
 - 5 V USB charger + cable — owned
 
-## Order of operations reminder (from PLAN.md)
+## Order of operations reminder (from README.md)
 
 1. ESP32 arrives → logger firmware, no soldering yet.
 2. Logger week decides the mounting spot (power + BT reach + remote-RF reach).

@@ -1,5 +1,5 @@
 // Bluedoor — detection & logging tunables (not secret; committed).
-// Start values per PLAN.md Phase 2; the whole point of the Phase 0.5 week
+// Start values per README.md Phase 2; the whole point of the Phase 0.5 week
 // is to tune these from real log data.
 #pragma once
 
@@ -45,7 +45,7 @@
 // ---- classic BT scanning ----
 // Inquiry length in 1.28 s units (4 = 5.12 s per cycle, restarted continuously)
 #define INQ_LEN_UNITS          4
-// Targeted remote-name probe (presence without RSSI, PLAN.md fallback method)
+// Targeted remote-name probe (presence without RSSI, README.md fallback method)
 #define PROBE_INTERVAL_MS      (4u * 60u * 1000u)
 #define PROBE_TIMEOUT_MS       (12u * 1000u)
 // Skip probing if the car answered inquiry recently anyway
@@ -71,7 +71,7 @@
 // (From two floors up the LED lit but the door stayed shut — range and/or
 // rolling-code counter drift; see README. Test pulses within earshot.)
 #define PULSE_MS               250u
-// v2 reed door-closed interlock — stubbed off in v1 (PLAN.md).
+// v2 reed door-closed interlock — stubbed off in v1 (README.md).
 // When fitted: alarm-type contact GPIO 27 -> GND, internal pullup,
 // magnet adjacent (door closed) = LOW.
 #define REED_ENABLED           0
