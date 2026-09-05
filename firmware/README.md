@@ -1,233 +1,162 @@
 # Bluedoor firmware
 
-One scanner codebase ([src/main.cpp](src/main.cpp)) plus a tiny in-car
-advertiser ([src/beacon.cpp](src/beacon.cpp)), five build targets
-([platformio.ini](platformio.ini)):
+One PlatformIO project, two source files, five build targets.
 
-| Target | What it is | Output |
-|---|---|---|
-| `logger` | **Phase 0.5** one-week "would-open" logger. Full arrival pipeline from [README.md](../README.md), but the only output is the log — no GPIO is ever driven, nothing is wired. | verdicts in the log only |
-| `v1` | **Production.** Same pipeline; a strict arrival verdict can additionally pulse GPIO 26 → PC817 optocoupler → the sacrificial remote's button ([COMPONENTS.md](../COMPONENTS.md) wiring). | log + real button press |
-| `logger-ble` | Same logger, but the radio layer watches a **BLE beacon carried in the car** instead of the car's own head unit. Needs `BEACON_BLE_MAC` in config.h; until it's filled in, the `SURVEY` census still logs everything heard. | verdicts in the log only |
-| `survey` | `logger-ble` plus classic inquiry: the census hears both radios at once, for attended drive-through tests. Runs the coex mix that crashes the controller (see design notes) — **never leave it running unattended**; reflash `logger-ble` after each session. | census in the log |
-| `beacon` | **The second ESP32, carried in the car.** Advertises its burned-in MAC + name every 100 ms at +9 dBm, non-connectable. No WiFi, no OTA, no flash writes — car USB power cuts ~10–15 s after ignition off, so nothing may depend on a clean shutdown. | BLE advertising + serial MAC & TX-power printout |
+- [src/main.cpp](src/main.cpp): the scanner. Radio layer, arrival state
+  machine, status web page, log, OTA, and (in production builds) the pulse
+  output.
+- [src/beacon.cpp](src/beacon.cpp): the in-car beacon. BLE advertising only.
 
-### Why `logger-ble` exists (Phase 0.5 result, 2026-08-27)
-
-The car's own Bluetooth cannot drive arrival detection, and no tuning fixes it:
-
-- It answers inquiry **only while parked with someone inside** — never while
-  driving. A controlled test (a phone riding in the car as a positive control)
-  logged 523 phone responses and **zero** from the car across a drive out and
-  back; the car last answered three minutes before the car pulled out.
-- When it does answer it reads **~35 dB weaker than a phone in the same seat**
-  (−75 dBm vs −40 dBm), so it straddles the −80 dBm trigger even parked inside
-  the garage. No headroom is left to detect an approach.
-- So the car is visible only in the state that must *never* fire
-  (wake-in-place) and invisible in the one that must (arrival) — an exact
-  inversion. The `REFUSE` guard at −60 dBm never fired and, at these levels,
-  never can.
-
-A beacon replaces it with a strong, fixed-address signal the existing ramp
-logic can use. The beacon rides the car's **switched USB** (measured
-2026-08-29: ~10–15 s of grace after ignition off, brief re-power while a door
-is open), so a parked car is a *silent* beacon: "away ≥ 10 min" arms whether
-the car is gone or garaged, and the wake-in-place refusal's remaining job is
-the door-open blip — someone rummaging in the parked car powers the beacon
-for ~10–20 s of strong flat signal, which must be refused. The 2026-08-29
-phone-in-car drive test also pinned the car body at **~20 dB** and showed an
-in-car transmitter at phone power never crosses the −80 trigger: at +9 dBm the
-beacon should read ≈ −84 (garage) / −77..−80 (door) / marginal at street range.
-
-So `RSSI_TRIGGER_DBM` and `WAKE_STRONG_DBM` now carry **two calibrations each**
-(`tunables.h`, switched on `DETECT_BLE`): −80/−60 for the classic radio,
-−90/−85 for the beacon. The two radios read ~10 dB apart at the same spot, and
-a single number cannot serve both — a −80 trigger simply never fires on a
-beacon that reads −84 in the garage. Both figures are still hypotheses until a
-beacon drive test replaces the phone's.
-
-Board: Freenove ESP32-WROOM (FNK0090).
-
-### Commissioning the beacon (2026-08-30)
-
-The second board is flashed and verified on the bench:
-
-- `pio run -e beacon -t upload` → the banner prints the burned-in BLE MAC;
-  that value goes in `BEACON_BLE_MAC` in config.h (gitignored, like every
-  other address here). A reflash never changes it.
-- The banner also prints the TX power **read back from the controller**
-  (`+9 dBm` confirmed) rather than the level it asked for — the whole link
-  budget rests on that one number, and a silently clamped radio would
-  otherwise look identical to a working one.
-- Heard by an independent scanner as `bluedoor-beacon`, −34 dBm across the
-  room. The name rides the advertising packet, not a scan response: the
-  advertising type is non-connectable, which cannot answer a scan request at
-  all, so the passive-scanning logger is guaranteed to see the name.
-- **1.0 s from reset to the first advertisement an outside scanner hears** —
-  the number that matters for the door-open blip, since car USB power comes
-  and goes. Measured with the board held in reset until the scanner was
-  already running (scan first, release reset, timestamp the first packet).
-
-Still open: the beacon has never been in the car. Street-range audibility at
-+9 dBm is what decides whether the door can be fully open on arrival or only
-opening during the descent.
-
-## Before flashing
-
-1. Edit [include/config.h](include/config.h) (gitignored — car MAC, WiFi
-   credentials and tokens never enter git): fill in `WIFI_SSID`, `WIFI_PASS`,
-   `OTA_PASSWORD`, for v1 a real `CONTROL_TOKEN`, and the address the scanner
-   watches — `CAR_BT_MAC` for the classic-radio builds, `BEACON_BLE_MAC` for the
-   beacon builds. (Fresh checkout? Copy `config.example.h` to `config.h` first.)
-2. Detection thresholds and actuation parameters live in
-   [include/tunables.h](include/tunables.h) — start values are hypotheses,
-   tuned from logger-week data.
-
-## Build / flash / watch
-
-```bash
-pio run -e logger              # build the Phase 0.5 logger (also plain `pio run`)
-```
-```bash
-pio run -e v1                  # build production v1
-```
-```bash
-pio run -e logger -t upload    # flash over USB (auto-detects the port)
-```
-```bash
-pio device monitor             # serial log at 115200
-```
-
-After the first USB flash, reflash over the air without touching the device
-(this is how the logger box becomes the v1 box without leaving its mounting
-spot). OTA only comes up with a real `OTA_PASSWORD` in config.h — blank or
-the placeholder keeps it disabled:
-
-```bash
-pio run -e v1 -t upload --upload-port bluedoor.local
-```
-
-If USB upload fails with a permission error, add yourself to `dialout`
-(`sudo usermod -aG dialout $USER`, relog).
-
-## Phase 0.5: using the logger week
-
-- Status page: **http://bluedoor.local** (auto-refreshes; state, counters,
-  last sighting, tunables, event tail).
-- **Mark button**: when you actually arrive by car (or test wake-in-place by
-  opening the parked car's door), tap "Mark in log" with a note — ground
-  truth to correlate against verdicts.
-- Full log: `/log` (rotates at 48 KB into `/log.old`); download both when
-  visiting. Serial mirrors everything. WiFi loss never stops detection.
-- Every boot starts DISARMED until a 10-min car-free period; verdict counters
-  persist across reboots (NVS).
-
-**Pass criteria:** every real arrival (`MARK`) has a matching
-strict `VERDICT`; zero strict `VERDICT`s without one — wake-in-place must
-show as `REFUSE`, reboots covered by boot-disarm, neighbors by the MAC
-filter. Only then buy Stage 2.
-
-## v1: architecture
-
-```
-BT sighting ─▶ state machine ─▶ strict verdict ─▶ run-mode gate ─▶ pulse 250 ms
-                    │                                  │              GPIO 26 ─▶ PC817 ─▶ remote
-                    │                             DISABLED / DRY-RUN: log only
-                    └─ post-pulse lockout: no re-fire until a full away period
-```
-
-- **Run modes**, persisted in NVS, switchable on the web page (token
-  required): `DISABLED` (never pulses, even manually), `DRY-RUN` (default on
-  first boot — verdicts log "pulse suppressed"), `LIVE`. A reboot never
-  escalates the mode.
-- **Boot safety:** GPIO 26 is non-strapping and driven LOW first thing in
-  `setup()`; the 10 kΩ hardware pulldown covers the boot-ROM window. A
-  boot/reset/flash cycle can never press the button.
-- **Manual pulse** (commissioning): token-gated button on the page, refused
-  in DISABLED mode. Its "hold" field (50–20000 ms, default `PULSE_MS`) is a
-  bench aid: a 3000 ms hold is long enough to meter GPIO 26, the PC817 LED
-  and the remote pads stage by stage. The auto path always uses `PULSE_MS`.
-  Any pulse — auto or manual — enters the same lockout, since the door state
-  is unknown afterwards. Every pulse logs a **pad read-back** and a **load
-  check** (the pin is floated on its weak pull-up for a moment; the opto LED
-  path must drag it LOW — `NOTHING connected` means a loose jumper or an open
-  joint). `WEB_CONTROLS_NEED_TOKEN 0` in tunables.h drops the token for bench
-  work; the page shows a red banner while it is off.
-- **Rolling code:** the MITTO is a KeeLoq-style transmitter. Pulses the door
-  cannot hear still advance its counter; past 16 unheard presses the receiver
-  wants two *consecutive* presses to resync. So run pulse tests within range,
-  and never turn an arrival pulse into a double pulse — BFT step logic makes
-  the second press a *stop*. Resync is a manual action only.
-- **Reed interlock (v2)** is compiled in but stubbed: `REED_ENABLED 0` in
-  tunables.h. Fitting the sensor later = wire GPIO 27, flip to 1, rebuild.
-- Everything the logger logs, v1 still logs ("log everything").
-
-### Commissioning sequence (maps to README.md Phases 1–2)
-
-1. Solder per COMPONENTS.md (new remote enrolled first — old one is the
-   programming key), flash `v1`.
-2. Device boots in **DRY-RUN**. Supervised session: use **manual pulse** to
-   confirm the door opens on command.
-3. Leave in DRY-RUN for several days; check every `DRY-RUN: arrival verdict`
-   line against reality.
-4. Only when the dry-run log is clean, set **LIVE** from the web page.
-
-### Hypotheses baked in (update after the logger week / commissioning)
-
-| # | Hypothesis | Where | Falsified if… |
+| Target | Radio | Pulse | Use it for |
 |---|---|---|---|
-| 1 | Strict ramp rule (≥3 sightings, ≥6 dB rise, crossing −80 dBm) catches every real arrival | `tunables.h` | logger week shows real arrivals with `RELAXED` but no strict `VERDICT` → relax ramp, lean on interlocks |
-| 2 | −80 dBm (classic) / −90 dBm (beacon) is the right proximity threshold from the chosen mounting spot | `RSSI_TRIGGER_DBM` | logged approach RSSI curves peak lower/higher |
-| 3 | ~~250 ms reads as one clean button press on the MITTO 12V-UP~~ **Confirmed 2026-09-05**: four 250 ms pulses beside the door, four openings | `PULSE_MS` | — |
-| 4 | 5.12 s inquiry cycles are fast enough to catch a driving approach | `INQ_LEN_UNITS` | arrivals appear as 1–2 sightings only → shorten cycles |
-| 5 | Lockout-until-full-away is an acceptable re-arm policy | state machine | legitimate same-hour second arrivals get eaten → add time-based cooldown path |
-| 6 | The sleeping head unit does NOT answer page probes (so probes can't guard wake-in-place) | `PROBE_*` | logger shows `PROBE` answers while parked → add page-presence guard before arming |
+| `beacon` | advertises | – | **The board in the car.** Non-connectable advertising every 100 ms at +9 dBm, name in the packet, burned-in address. No WiFi, no OTA, no flash writes: it tolerates losing power at any moment. |
+| `logger-ble` | BLE scan | never | **Listen-only scanner.** Full arrival logic, log and status page, no pin ever driven. Use it to find the mounting spot and to validate the logic before wiring anything. |
+| `v1-ble` | BLE scan | yes | **Production scanner.** `logger-ble` plus run modes, token-gated controls, the GPIO 26 pulse and the post-pulse lockout. Boots in DRY-RUN. |
+| `survey` | BLE + classic | never | Attended census of everything on both radios. Runs the WiFi + classic-inquiry mix that crashes the controller after a few hours, so never leave it running. |
+| `logger` / `v1` | classic inquiry | never / yes | The original design, watching a car head unit's classic Bluetooth instead of a beacon. Kept for reference; see the design notes in the top-level README for why it does not work. |
+
+Board: any ESP32-WROOM-32 dev board (tested on the Freenove FNK0090).
+
+## Configure
+
+```bash
+cp include/config.example.h include/config.h
+```
+
+`config.h` is gitignored. Fill in:
+
+| Field | Meaning |
+|---|---|
+| `WIFI_SSID`, `WIFI_PASS` | your LAN, for the status page and OTA |
+| `BEACON_BLE_MAC` | the beacon's address, printed on its serial banner at boot |
+| `OTA_PASSWORD` | required for over-the-air reflashing; blank or the placeholder keeps OTA off |
+| `CONTROL_TOKEN` | required by the mode switch and manual pulse; controls stay refused while it is the placeholder |
+| `DEVICE_HOSTNAME` | mDNS name, default `bluedoor` → `http://bluedoor.local` |
+| `TZ_INFO` | POSIX timezone string for log timestamps |
+| `SURVEY_IGNORE_MACS` | optional: fixed advertisers in your house to drop from the census |
+| `CAR_BT_MAC` | only for the classic-radio targets |
+
+Thresholds and timings live in [include/tunables.h](include/tunables.h),
+which is committed and commented.
+
+## Build, flash, watch
+
+```bash
+pio run -e beacon -t upload          # the car board, over USB
+```
+```bash
+pio run -e logger-ble -t upload      # the garage board, first flash over USB
+```
+```bash
+pio device monitor                   # serial log at 115200
+```
+```bash
+pio run -e v1-ble -t upload --upload-port bluedoor.local   # later flashes, over the air
+```
+
+USB permission error on Linux: add yourself to `dialout` and log in again.
+
+OTA at the edge of WiFi range can take a few attempts; a failed OTA is
+harmless, the old firmware keeps running.
+
+## Status page
+
+`http://bluedoor.local`, auto-refreshing: run mode and state, counters,
+last sighting, the active tunables, and the tail of the event log. Full log
+at `/log` (rotates at 48 KB into `/log.old`; both survive reboots).
+
+Controls, each requiring `CONTROL_TOKEN`:
+
+- **Mark in log** with a free-text note: ground truth ("arrived by car",
+  "opened the parked car's door") to compare against verdicts.
+- **Mode**: `DISABLED` / `DRY-RUN` / `LIVE`, persisted. A reboot never
+  escalates the mode. First boot is DRY-RUN.
+- **Manual pulse** (v1 builds): a single press for commissioning, refused in
+  DISABLED. The optional hold field (50 to 20000 ms) is a bench aid: a 3 s hold
+  lets you meter the pin, the optocoupler LED and the remote pads stage by
+  stage. Manual pulses enter the same lockout as automatic ones.
+
+## How the scanner decides
+
+- **Disarmed at boot** until no sighting for `AWAY_MIN_MS` (10 min).
+- **Strict arrival** (the only thing that fires): absence, then an encounter
+  with at least `APPROACH_MIN_SIGHTINGS` sightings, rising by at least
+  `APPROACH_MIN_RISE_DB`, crossing `RSSI_TRIGGER_DBM`.
+- **Relaxed rule**, logged only, never fires: two sightings above the trigger
+  inside a minute, no ramp required. It exists so you can compare the two
+  rules against your Mark lines and decide with data.
+- **Wake-in-place refusal**: an encounter that starts already above
+  `WAKE_STRONG_DBM` and stays within `WAKE_FLAT_DB` is the parked-car
+  signature (someone opened a door and briefly powered the beacon). The whole
+  encounter is latched non-fireable.
+- **Lockout** after any pulse until a full absence and a new arrival.
+- An encounter with no verdict ends after `ENCOUNTER_QUIET_MS` of silence or
+  `ENCOUNTER_MAX_MS` total.
+
+### Pulse safety (v1 builds)
+
+- GPIO 26 is a non-strapping pin, driven LOW first thing in `setup()`. The
+  10 kΩ hardware pulldown covers the boot-ROM window before that.
+- Every pulse logs a **pad read-back** (the pin's actual level) and a **load
+  check**: the pin floats briefly on its weak pull-up and the optocoupler LED
+  path must drag it LOW. `NOTHING connected` in the log means a loose jumper
+  or an open joint.
+- `WEB_CONTROLS_NEED_TOKEN 0` in tunables drops the token requirement for
+  bench work. The page shows a red banner while it is off. Put it back before
+  the device goes anywhere near the door.
+- Rolling-code remotes count presses the door cannot hear. Past a receiver's
+  resync window (16 presses on BFT) it wants two consecutive presses to
+  resync. Test within range, and never let an arrival press become a double
+  press: on step-logic doors the second press is a *stop*.
 
 ## Reading the log
 
 | Tag | Meaning |
 |---|---|
-| `VERDICT WOULD OPEN (strict)` | The firing rule fired. In v1 this is followed by a `PULSE` line (LIVE) or a suppression line (DRY-RUN/DISABLED). |
-| `PULSE` | v1: actual/suppressed/refused/manual pulses, and pulse completion. |
-| `MODE` | v1: run-mode changes (web) and the mode restored at boot. |
-| `RELAXED` | The no-ramp fallback rule would have fired here (comparison data). |
-| `REFUSE` | Wake-in-place signature (strong+flat after absence) — the whole encounter is latched non-fireable. |
-| `ENC` | Encounter (sighting cluster while armed) started/ended, with RSSI stats and a `trend=` label (approaching / receding / steady). |
-| `SIGHT` | Car sightings; aggregated per minute while disarmed, each line with first→last RSSI and a trend label — `receding` = drove away, `steady` = parked awake (e.g. someone opened the car), `approaching` = drove up. A `went quiet` flush timestamps the moment sightings stopped. |
-| `PROBE` | Targeted page to the car — presence without RSSI, never fires anything. |
-| `STATE` | DISARMED(boot/seen/lockout) ↔ ARMED transitions with reasons. |
-| `HB` | 30-min heartbeat (liveness); gap = crash/power loss. Includes `big=` (largest free block) — allocation failures are about fragmentation, which free heap alone hides — plus `http=` (web requests served this interval), `wifidrop=` (WiFi disconnects this interval), and `ALLOCFAIL=` (cumulative failed mallocs with the last requested size — should never appear). |
-| `RADIO` | 5-min census of what the inquiry radio actually heard: completed cycles, every device report (car and anonymous neighbours), and the best RSSI of anything. Reads a quiet log as "heard nothing" rather than "was not listening". Also marks the WiFi/BT coexistence test windows (`WIFI_DUTY_TEST` in tunables.h): WiFi alternates 10 min up / 20 min quiet, so the two can be compared inside one run. Every boot starts with WiFi up, so OTA is always reachable within 10 min of a reset. |
-| `SURVEY` | BLE-build census (`BLE_SURVEY` in tunables.h): every 20 s, one line per distinct advertiser heard that interval — `BT `/`BLE` radio tag (classic only in the `survey` env), sighting count, first/best/last RSSI, and the advertised name when one is in the advertising packet (the scan is passive, so names sent only in scan responses never appear). A rising first→last across consecutive lines is an approach in progress. Known fixtures are dropped via `SURVEY_IGNORE_MACS` in config.h. |
-| `MARK` | Your ground-truth annotations. |
-| `ERR` | Init problems, watchdog restarts, refused control attempts (with source IP). Boot-time crash forensics also land here: the `BOOT` line's reset reason distinguishes `int-wdt` (ISR/critical-section stall >300ms — the classic WiFi+BT coexistence signature) from `task-wdt` (IDLE0 starved >5s) and `rtc-wdt`; a task-wdt reset additionally logs its RTC-RAM breadcrumb and an abort message, so a watchdog reset with *neither* points at the int-wdt/coex path. |
+| `VERDICT WOULD OPEN (strict)` | The firing rule fired. In v1 builds, followed by a `PULSE` line (LIVE) or a suppression line (DRY-RUN / DISABLED). |
+| `RELAXED` | The no-ramp comparison rule would have fired here. Never actuates. |
+| `REFUSE` | Wake-in-place signature; the encounter is latched non-fireable. |
+| `PULSE` | Actual, suppressed, refused or manual pulses, with the pad read-back and load check. |
+| `MODE` | Run-mode changes and the mode restored at boot. |
+| `ENC` | Encounter (sighting cluster while armed) started or ended, with RSSI stats and a `trend=` label: approaching / receding / steady. |
+| `SIGHT` | Beacon sightings, aggregated per minute while disarmed, each with first→last RSSI and a trend label. A `went quiet` line timestamps when sightings stopped. |
+| `STATE` | DISARMED (boot / seen / lockout) ↔ ARMED transitions with reasons. |
+| `SURVEY` | Census (`BLE_SURVEY` on): every `BLE_SURVEY_MS`, one line per distinct advertiser heard, with sighting count, first/best/last RSSI, and the advertised name if any. A rising first→last across consecutive lines is an approach in progress. The `survey` target tags lines `BT` or `BLE`. |
+| `HB` | Half-hourly heartbeat: uptime, free heap and largest free block, web requests served, WiFi drops, allocation failures. A gap means a crash or power loss. |
+| `RADIO` | Classic-radio targets only: 5-minute census of inquiry results. |
+| `PROBE` | Classic-radio targets only: a targeted page to the car for presence without RSSI. |
+| `MARK` | Your annotations from the status page. |
+| `ERR` | Init problems, refused control attempts (with source IP), and boot-time forensics: the reset reason, and after a watchdog reset the RTC-RAM breadcrumb and abort message from the previous run. |
+
+Serial mirrors everything at 115200. WiFi loss never stops detection.
 
 ## Design notes
 
-- **Stability verdict (overnight soak, 2026-08-28):** continuous classic
-  inquiry + WiFi crashes the prebuilt BT controller every 1–3.5 h — a
-  controller assert (`ASSERT_PARAM rwbt.c:393`) and repeated int-wdt stalls
-  inside its level-4 interrupt (`hli_vectors.S`), with the app loop innocent
-  every time (heap 28–32 K min, temp flat, http=0). Desk conditions (strong
-  WiFi, cool, clean power) reproduced it, ruling out environment. Retiring
-  continuous inquiry is the fix; the BLE build does exactly that. Note: the
-  classic-RAM release is NOT possible on Arduino 2.0.17's prebuilt BTDM libs
-  (`esp_bt_controller_init` rejects both a BLE cfg.mode and a post-release
-  default cfg), so the BLE build runs the controller dual-mode with classic
-  simply unused. **Confirmed 2026-08-29: the BLE build ran 25 h clean under
-  identical desk conditions** (vs. 4 crashes in 9.5 h for classic), heap
-  fragmentation flat (`big=` 27 K throughout, vs. 18–19 K on classic) —
-  retiring inquiry fixed it.
-- Classic BT (BR/EDR) inquiry via ESP-IDF GAP, RSSI from
-  `ESP_BT_GAP_DISC_RES_EVT`, continuous cycles. BLE is useless here — the car
-  is classic-only (Phase 0).
-- The ESP32 itself is non-connectable and non-discoverable; other devices'
-  MACs are never logged (privacy) — just anonymous counts.
-- WiFi + classic BT share the radio (coexistence enabled in the stock Arduino
-  core); a slightly sluggish web page while inquiry runs is normal. Detection
-  never depends on WiFi.
-- Partition scheme `min_spiffs`: OTA stays possible, a 128 KB LittleFS holds
-  ~2 weeks of logs across the two rotation files.
-- Security posture (see README.md): convenience-lock grade. Controls are LAN-only +
-  token; a spoofed MAC still has to fake an approach ramp after a real away
-  period. Physical remotes and key remain the fallback.
+- **BLE passive scanning, continuously**, restarted every
+  `BLE_SCAN_RESTART_MS` as a liveness watchdog. The beacon's name rides in the
+  advertising packet itself (non-connectable advertising cannot answer scan
+  requests), so a passive scanner always sees it.
+- **The classic radio is left compiled in but unused** on the BLE targets:
+  the Arduino core's prebuilt Bluetooth libraries reject a BLE-only
+  controller configuration, so the controller runs dual-mode with inquiry
+  simply never started. Continuous classic inquiry alongside WiFi is what
+  crashed the controller (an assert in the prebuilt stack under coexistence,
+  every one to three hours); with inquiry retired the same board ran a 25 h
+  soak clean with flat heap fragmentation.
+- **The beacon reads its TX power back** from the controller and prints
+  that, rather than the value requested. The link budget rests on that one
+  number and a silently clamped radio would otherwise look identical to a
+  working one.
+- **Crash forensics** are built in because the controller crash was invisible
+  from the application side: reset-reason decoding, an abort-message hook
+  (`-Wl,--wrap=esp_system_abort`) that saves the message to RTC RAM, task
+  breadcrumbs in RTC RAM, core-dump readout, and heap and temperature in the
+  heartbeat. `WIFI_DUTY_TEST` in tunables alternates WiFi on and off inside
+  one run so radio-quiet and WiFi-up windows can be compared directly.
+- **Partition scheme `min_spiffs`**: two app slots so OTA stays possible, and
+  a 128 KB LittleFS holding about two weeks of logs across the two rotation
+  files.
+- The scanner itself is non-connectable and non-discoverable. Outside the
+  census, other devices' addresses are never logged.
+- `soak/capture.sh` captures the serial port to a timestamped file across USB
+  re-enumerations, for overnight soak tests.

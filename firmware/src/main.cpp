@@ -1,16 +1,16 @@
 // Bluedoor — arrival detection + (v1) remote actuation. One codebase, two
 // build targets (platformio.ini):
 //
-//   logger (PULSE_ENABLED=0): Phase 0.5 one-week "would-open" logger. Full
-//     arrival pipeline from README.md (classic BT inquiry + RSSI filter,
+//   logger (PULSE_ENABLED=0): listen-only "would-open" logger. Full arrival
+//     pipeline (radio sightings + MAC filter,
 //     boot-disarm, away threshold, approach signature, lockout) but the only
 //     output is a log: flash file + status web page. No GPIO is ever driven.
 //
 //   v1 (PULSE_ENABLED=1): production. Same pipeline; a strict verdict can
 //     additionally pulse GPIO 26 -> PC817 optocoupler -> sacrificial remote's
 //     button (COMPONENTS.md wiring). Run modes DISABLED / DRY-RUN / LIVE,
-//     persisted; boots into whatever was set, first boot = DRY-RUN (README.md
-//     Phase 2: dry-run week first). Web controls are token-gated.
+//     persisted; boots into whatever was set, first boot = DRY-RUN (dry-run
+//     week first). Web controls are token-gated.
 //
 // Verdicts logged:
 //   VERDICT WOULD-OPEN (strict)  — the primary rule: absence >= AWAY_MIN, then
@@ -20,7 +20,7 @@
 //   REFUSE wake-in-place         — strong+flat encounter after absence (car
 //                                  door opened while parked): latches the whole
 //                                  encounter non-fireable
-// Pass criteria for the week: every real arrival -> strict WOULD-OPEN,
+// Pass criteria for a logging week: every real arrival -> strict WOULD-OPEN,
 // zero strict WOULD-OPENs from anything else.
 
 #include <Arduino.h>
@@ -55,18 +55,18 @@
 #ifndef PULSE_ENABLED
 #define PULSE_ENABLED 0
 #endif
-// Phase 0.5 result (2026-08-27): the car's own head unit cannot support arrival
-// detection. It answers inquiry only while parked with someone inside — never
-// while driving — and reads ~35 dB weaker than a phone in the same seat, so it
-// straddles the trigger threshold even parked inside the garage. DETECT_BLE
-// swaps the radio layer to watch a BLE beacon carried in the car instead: a
-// strong, always-advertising, fixed-MAC signal the ramp logic can actually use.
+// DETECT_BLE=0 watches a car head unit's classic Bluetooth (the original
+// design). In practice a head unit answers inquiry only while parked with
+// someone inside — never while driving — and reads ~35 dB weaker than a phone,
+// so it cannot support arrival detection. DETECT_BLE=1 swaps the radio layer
+// to watch a BLE beacon carried in the car instead: a strong,
+// always-advertising, fixed-MAC signal the ramp logic can actually use.
 #ifndef DETECT_BLE
 #define DETECT_BLE 0
 #endif
 // env:survey only — classic inquiry running alongside the BLE scan so the
 // census hears everything (car head unit is classic; phones are BLE). This is
-// the coex config the stability hunt convicted (rwbt.c asserts under
+// the coex config that crashes the prebuilt controller (rwbt.c asserts under
 // inquiry+WiFi), so it is for attended test sessions, never the long-term build.
 #ifndef SURVEY_CLASSIC
 #define SURVEY_CLASSIC 0

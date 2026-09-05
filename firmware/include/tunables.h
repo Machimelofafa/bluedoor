@@ -1,6 +1,5 @@
 // Bluedoor — detection & logging tunables (not secret; committed).
-// Start values per README.md Phase 2; the whole point of the Phase 0.5 week
-// is to tune these from real log data.
+// Start values; tune them from your own logger data (README, "Tuning").
 #pragma once
 
 // ---- state machine ----
@@ -8,11 +7,11 @@
 #define AWAY_MIN_MS            (10u * 60u * 1000u)
 // "Near enough" RSSI threshold for a would-open. Two calibrations, because the
 // two radios land ~10 dB apart at the same spot: the classic value was set for
-// the car head unit, the BLE one for the in-car beacon. Beacon figure from the
-// 2026-08-29 drive test (car body ~20 dB; a +1 dBm phone in the car topped out
-// at -79 from the window, so -80 could never fire); the beacon's +9 dBm should
-// read ~-84 in the garage, -77..-80 at the door. Identity comes from the fixed
-// MAC, so a loose threshold cannot let another device false-trigger.
+// the car head unit, the BLE one for the in-car beacon. The beacon figure comes
+// from a drive test: the car body costs ~20 dB and a closed garage door another
+// ~20, so a +9 dBm beacon reads around -84 in the garage and -77..-80 at the
+// door. Identity comes from the fixed MAC, so a loose threshold cannot let
+// another device false-trigger.
 #if DETECT_BLE
 #define RSSI_TRIGGER_DBM       (-90)
 #else
@@ -45,7 +44,7 @@
 // ---- classic BT scanning ----
 // Inquiry length in 1.28 s units (4 = 5.12 s per cycle, restarted continuously)
 #define INQ_LEN_UNITS          4
-// Targeted remote-name probe (presence without RSSI, README.md fallback method)
+// Targeted remote-name probe (presence without RSSI; classic-radio targets only)
 #define PROBE_INTERVAL_MS      (4u * 60u * 1000u)
 #define PROBE_TIMEOUT_MS       (12u * 1000u)
 // Skip probing if the car answered inquiry recently anyway
@@ -57,21 +56,20 @@
 // Wiring per COMPONENTS.md: pulse pin -> 330R -> PC817 LED, PC817 output across
 // the remote's button pads. Non-strapping pin; the 10k hardware pulldown on
 // the opto drive is NOT optional.
-// 2026-09-05 bench note: a loose Dupont contact once made pin 26 look dead
-// (chip read its pad HIGH, header pin metered 0 V). The pin is fine; every
-// pulse logs a pad read-back and a load check for that kind of hunt.
+// Bench note: a loose Dupont contact can make the pin look dead (chip reads
+// its pad HIGH, header pin meters 0 V). Every pulse logs a pad read-back and a
+// load check for exactly that kind of hunt.
 #define PIN_PULSE              26
 // Web controls (mode switch, manual pulse) normally demand CONTROL_TOKEN from
 // config.h. 0 = no token asked and no token fields on the page — bench work on
 // a trusted LAN only; the page shows a red banner while this is 0. Set back to
-// 1 before the scanner returns to the garage. (2026-09-05: 0 for the bench
-// hunt, back to 1 for the garage install the same day.)
+// 1 before the scanner goes anywhere near the door.
 #define WEB_CONTROLS_NEED_TOKEN 1
-// CONFIRMED 2026-09-05: four 250 ms pulses beside the door, four openings.
-// (From two floors up the LED lit but the door stayed shut — range and/or
-// rolling-code counter drift; see README. Test pulses within earshot.)
+// 250 ms reads as one clean press on a BFT MITTO. Door ignores it: lengthen;
+// double-triggers: shorten. Test pulses within range of the door only (README:
+// rolling-code counters advance on presses the door cannot hear).
 #define PULSE_MS               250u
-// v2 reed door-closed interlock — stubbed off in v1 (README.md).
+// v2 reed door-closed interlock — stubbed off in v1 (README, "Adapting it").
 // When fitted: alarm-type contact GPIO 27 -> GND, internal pullup,
 // magnet adjacent (door closed) = LOW.
 #define REED_ENABLED           0
@@ -110,9 +108,9 @@
 #define WIFI_TEST_OFF_MS       (20u * 60u * 1000u)
 
 // ---- BLE beacon mode (DETECT_BLE=1 builds, see platformio.ini env logger-ble) ----
-// Commissioning census: every BLE_SURVEY_MS, one SURVEY line per advertiser
-// heard that interval (count + first/best/last RSSI + name). In this RF-quiet
-// spot that is a handful of lines, and it makes range tests reflash-free: drive
+// Census: every BLE_SURVEY_MS, one SURVEY line per advertiser
+// heard that interval (count + first/best/last RSSI + name). It makes range
+// tests reflash-free: drive
 // up with any advertiser and read its RSSI trail out of the log — no need to
 // know its address beforehand (phones rotate theirs; give the phone advertiser
 // a local name to make the trail self-identifying). This firmware deliberately
@@ -120,11 +118,10 @@
 // BEACON_BLE_MAC is commissioned. The env:survey build extends the census to
 // classic inquiry responses (lines tagged BT vs BLE) for drive-through tests.
 #define BLE_SURVEY             1
-// 5 s buckets: the whole arrival is fast (~3 s ramp descent + 4-10 s waiting
-// at the door), so drive-through tests need street / descent / door-wait in
-// separate buckets or the gradient smears into one line. Costs ~4x the log
-// churn of the earlier 20 s setting — acceptable for the attended survey
-// build; widen it again if a census build ever runs unattended for days.
+// 5 s buckets: an arrival is only a few seconds long, so drive-through tests
+// need street / approach / door-wait in separate buckets or the gradient
+// smears into one line. Widen to 20 s if a census build runs unattended for
+// days, to save log churn.
 #define BLE_SURVEY_MS          (5u * 1000u)
 // Census table: max distinct addresses per interval; extras are counted and
 // logged as one overflow line, strongest stay in the table.

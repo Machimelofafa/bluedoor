@@ -3,19 +3,19 @@
 // Powered from the car's USB port, which is switched: ~10-15 s of grace after
 // ignition off, brief re-power while a door is open. So this build keeps
 // nothing: no WiFi, no OTA, no flash writes — power can vanish mid-anything
-// and the next ignition just boots it fresh (measured 2026-08-30: 1.0 s from
-// reset to the first advertisement an outside scanner hears, well inside even
-// a door-open blip). Reflash over USB in the car or on the bench.
+// and the next ignition just boots it fresh (measured: 1.0 s from reset to the
+// first advertisement an outside scanner hears, well inside even a door-open
+// blip). Reflash over USB in the car or on the bench.
 //
 // It advertises its burned-in public MAC (the fixed identity BEACON_BLE_MAC
 // wants — commissioning: read the MAC off this build's serial output, or off
 // the scanner's SURVEY census, where the advertised name identifies it) with
 // a name-carrying non-connectable packet every 100 ms at +9 dBm — the banner
 // reports the power read back from the controller, not the one asked for, so a
-// silently clamped radio cannot pass for a working one. The 2026-08-29
-// phone-in-car test measured the car body at ~20 dB and the phone's +1 dBm
-// topping out at -79 seen from the window; +9 dBm is the whole margin this
-// link has, so max TX power is a requirement, not a tweak.
+// silently clamped radio cannot pass for a working one. A phone-in-car test
+// measured the car body at ~20 dB (a +1 dBm phone inside the car never crossed
+// -79 dBm from the garage); +9 dBm is the whole margin this link has, so max
+// TX power is a requirement, not a tweak.
 #if BEACON_BUILD
 
 #include <Arduino.h>

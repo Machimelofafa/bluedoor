@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Overnight serial capture for the stability soak (reset hunt, 2026-08-27).
+# Overnight serial capture for stability soak tests.
 #
 # Usage:  ./capture.sh [port]        default port: /dev/ttyUSB0
 #

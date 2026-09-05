@@ -1,468 +1,308 @@
 # Bluedoor
 
-**Open the garage when the car arrives, without touching the garage.**
+**Your garage opens when your car arrives. The garage is never modified.**
 
-A two-ESP32 system that recognises the *car itself* (not a phone) driving up,
-and presses the button of a genuine, already-enrolled garage remote through an
-optocoupler. The door controller is never opened, rewired, or re-programmed:
-it only ever sees a normal rolling-code press from its own remote. Total spend
-under €45.
+Two ESP32 boards and a €1 optocoupler. One board rides in the car as a
+Bluetooth beacon. The other sits in the garage, recognises the beacon
+approaching, and presses the button of a spare garage remote that is already
+enrolled on the door. The door controller sees a normal rolling-code press
+from its own remote; nothing is wired into it, enrolled on it, or changed.
 
-This README is the full project report: the goal, the design, every
-experiment that shaped it (including the one that failed), the safety
-reasoning, and the current status. Companion documents:
+- Recognises the **car**, not a phone. Anyone who drives the car gets the
+  door.
+- Works with **any garage remote that has a push button**. No RF cloning, no
+  rolling-code tricks.
+- Under **€45** in parts, most of it the two ESP32 boards.
+- Fails safe: boots disarmed, dry-run mode by default, hardware pulldown on
+  the pulse pin, lockout after every press.
 
 | Document | What it is |
 |---|---|
 | [COMPONENTS.md](COMPONENTS.md) | Bill of materials and the wiring map |
-| [wiring-v1.html](wiring-v1.html) | Visual build guide: named parts, PC817 leg identification, resistor stripes, pad polarity measurement, build order. Open it in a browser. |
-| [firmware/README.md](firmware/README.md) | Build targets, flashing, the log format, design notes |
-| [firmware/](firmware/) | PlatformIO project: scanner (`main.cpp`) and in-car beacon (`beacon.cpp`) |
-
-**Status (2026-09-05):** the electronics are proven end to end. A 250 ms pulse
-from the ESP32 opens the door every time from beside it. The in-car beacon is
-commissioned on the bench. What remains is the field week: beacon mounted in
-the car, scanner in the garage in dry-run, arrival logic checked against real
-arrivals before the pulse is enabled.
+| [wiring-v1.html](wiring-v1.html) | Illustrated build guide for the remote side: parts, optocoupler pinout, resistor colours, soldering to the remote's pads. Open in a browser. |
+| [firmware/README.md](firmware/README.md) | Build targets, configuration, the status page, the log format, tunables |
 
 ---
 
-## 1. Goal and constraints
+## What you need
 
-Recognise the car arriving home and open the existing garage door, subject to:
+**A garage door with an RF remote** that has a physical push button. The
+guide uses a BFT MITTO, but any remote with a button and its own battery
+works: the ESP32 only ever closes that button's contacts. You need a remote
+you can sacrifice, so plan on buying a new daily-carry remote and dedicating
+the old one to the project. Enroll the new one *before* you open the old one.
 
-- **The door system stays 100 % untouched.** No wires into the controller, no
-  new remotes enrolled, no firmware on the operator. Its remotes and the
-  physical key keep working exactly as before.
-- **Recognise the car, not the driver.** Several people drive it, some with
-  phones paired to the car and some without. A phone-based trigger would work
-  for one driver only.
-- **Minimal spend.** Realistic budget €25 to €45, bought in stages so that a
-  failed experiment costs as little as possible.
+**A car with a USB socket that switches with the ignition.** The beacon lives
+on it. Switched power is what makes a parked car silent, which the arrival
+logic relies on. If your car's USB is always on, see "Adapting it" below.
 
-### What was ruled out, and why
+**Parts** (full list in [COMPONENTS.md](COMPONENTS.md)):
 
-| Option | Why not |
-|---|---|
-| Off-the-shelf smart openers (Tailwind iQ3, Meross MSG100, Remootio 3, BFT B-EBA gateway) | Every one recognises the *phone*, and most wire into the operator's control board. The two things the goal forbids. Prices €40 to €130. |
-| Phone geofencing | Cheapest of all, but recognises the driver, not the car. |
-| Camera + licence-plate recognition | Genuinely recognises the car, but needs a Pi or laptop plus camera (€50+), night lighting, and is fooled by a printed plate. |
-| Cloning or replaying the remote's 433 MHz signal | BFT rolling code (KeeLoq-style). Replay is useless. |
-| Emulating a new 433 MHz remote (ESP32 + CC1101, enrolled in learn mode) | Technically real, but enrolling a synthetic remote *writes to the door base*, which is no longer "untouched". It also needs a sub-GHz radio the ESP32 lacks. A €1 optocoupler pressing an already-paired genuine remote changes nothing in the receiver. |
-| The car's own Bluetooth as the trigger | This was the original plan. It failed in the field. Section 3 explains. |
-
----
-
-## 2. How it works
-
-```
-[Car arrives: BLE beacon on switched USB, +9 dBm, fixed MAC]
-                 │
-                 ▼
-[Scanner ESP32 in the garage: passive BLE scan, MAC filter, RSSI trail]
-                 │
-                 ▼
-[Arrival state machine: away ≥ 10 min, then a rising approach ramp]
-                 │  strict verdict only, run-mode gate, post-pulse lockout
-                 ▼
-[GPIO 26 ── 330 Ω ── PC817 optocoupler ── across the remote's button pads]
-                 │
-                 ▼
-[Sacrificial BFT MITTO 12V-UP remote, own 12 V battery]
-                 │  a legitimate rolling-code press
-                 ▼
-             door opens
-```
-
-Two ESP32 boards:
-
-- **The beacon** rides in the car, powered from the car's USB socket. It
-  advertises its burned-in Bluetooth address and a name every 100 ms at
-  +9 dBm, non-connectable. No WiFi, no flash writes, nothing that needs a
-  clean shutdown, because the car cuts USB power about 10 to 15 s after
-  ignition off.
-- **The scanner** sits in the garage on a phone charger. It scans passively
-  for that one address, feeds the RSSI trail into a state machine, serves a
-  status page on the LAN, and drives the optocoupler.
-
-The remote is a genuine BFT remote already enrolled on the door. The
-optocoupler's output transistor sits across the pads of its button, so the
-ESP32 "presses" it with full galvanic isolation. The remote keeps its own
-battery. The door cannot tell the difference from a finger.
-
-### The one thing a remote press cannot tell you
-
-A BFT remote press is a *step* command, not an *open* command. The door's
-logic was confirmed by hand on 2026-09-03: closed → opens, open → closes,
-moving → stops, stopped mid-travel → reverses. A stray pulse on an open door
-closes it, and one during travel stops it.
-
-Two ways to handle this. **v1 (built)** has no door sensor and relies on
-compensating controls: the system only fires on a confirmed arrival, when the
-driver is present, watching, with a remote in hand. Plus boot-disarm,
-approach evidence, cooldown, and a lockout after every pulse. The accepted
-residual failure: if the door was left open when the car arrives, the pulse
-closes or stops it. Annoying, not dangerous. The operator's own obstacle
-detection remains active throughout. **v2 (optional)** adds a wired reed
-contact as a hard interlock: never pulse unless the door is confirmed closed.
-The firmware keeps that input stubbed so it is a plug-in upgrade.
-
----
-
-## 3. The experiments
-
-Everything below was measured, not assumed. Dates are when the measurement
-was made.
-
-### 3.1 Phase 0: is the car visible at all? (2026-08-22)
-
-A phone running a Bluetooth scanner app, next to the car:
-
-- The head unit ("Uconnect", ALPS Alpine module) is **classic Bluetooth
-  (BR/EDR) only**. No BLE at all.
-- Generally discoverable, RSSI −42 dBm at the car and −78 dBm at distance.
-- It wakes and broadcasts as soon as a car door opens, before ignition.
-- Still discoverable with ignition on and a paired phone streaming audio
-  (−55 dBm from an unpaired scanner). An active A2DP link does not stop it
-  answering inquiry.
-- Classic Bluetooth has no address randomisation, so the address is stable.
-
-Feasibility passed at phone level. That is a weaker claim than it sounds, and
-the next phase was designed to test it properly before any more money was
-spent.
-
-### 3.2 Phase 0.5: the one-week logger. Failed. (2026-08-27)
-
-The first ESP32 ran the *full* arrival pipeline and state machine for a week,
-but could only log. Every sighting, every state transition, and every "would
-open" verdict went to flash and a status page, with a button to mark real
-arrivals as ground truth.
-
-Three marked arrivals produced **zero** strict verdicts. Every encounter was
-flat. The one relaxed-rule fire was on a *departure*: a false open.
-
-The controlled test that settled it: a phone rode in the car as a positive
-control on a drive out and back. In the five-minute window containing the
-whole drive, the phone was heard 523 times and the car zero times.
-
-| Car state | Heard by the ESP32 |
-|---|---|
-| Parked, radio on, someone inside | Yes, about 78 reports per 5 min at −75 dBm |
-| Driving, ignition on | **No. Zero.** |
-| Parked, ignition off, empty | No |
-
-The car is visible only in the state that must *never* fire (someone sitting
-in the parked car) and invisible in the one that must (arriving). An exact
-inversion. Two supporting numbers made it worse:
-
-- The head unit is a weak emitter. A phone on the driver's seat reads −38 to
-  −41 dBm; the head unit in the same car reads −66 to −84. About 35 dB of
-  headroom simply is not there.
-- The wake-in-place refusal was dead code. Its threshold was −60 dBm and the
-  car never exceeded −66, while noise at the detection floor (an 18 dB swing
-  inside one encounter) looked convincingly like an approach ramp. In a live
-  build that opens the door on someone sitting in the parked car.
-
-**Decision:** keep the whole pipeline, replace the signal. A BLE beacon
-carried in the car gives a strong, always-on, fixed-address signal the ramp
-logic can actually use.
-
-### 3.3 Mounting-spot RF survey (2026-08-27)
-
-Walk test with a phone as the source, scanner inside near the closed door:
-
-| Position | Best RSSI | Reports per 30 s |
+| Part | Qty | Role |
 |---|---|---|
-| Top of the ramp | nothing (one −93 dBm blip) | 0 to 1 |
-| Middle of the ramp | −77 to −81 dBm | 19 to 33 |
-| In front of the door | −61 to −66 dBm | 63 to 186 |
+| ESP32-WROOM-32 dev board | 2 | scanner in the garage, beacon in the car |
+| PC817 optocoupler (or EL817 / LTV-817) | 1 | the isolated "finger" on the remote's button |
+| 330 Ω resistor | 1 | optocoupler LED series resistor |
+| 10 kΩ resistor | 1 | pulldown on the pulse pin (not optional) |
+| Thin stranded wire, heat-shrink, a few Dupont jumpers, a small box | | assembly |
+| 5 V USB charger and cable | 1 | power for the scanner |
 
-A monotonic ramp of about 18 dB. Exactly the signature the state machine
-wants, and proof the building is not the obstacle. The closed door itself
-costs about 20 dB.
+**Tools:** soldering iron with a fine tip, a multimeter (mandatory: you
+measure the remote's button polarity before soldering), wire strippers,
+isopropyl alcohol.
 
-### 3.4 The reset mystery (2026-08-28 to 29)
+**Software:** [PlatformIO](https://platformio.org/) (CLI or the VS Code
+extension). The firmware targets the Arduino core for ESP32.
 
-The logger rebooted every one to three hours. The firmware grew a full
-forensics kit to find out why: reset-reason decoding, RTC-RAM breadcrumbs
-that survive a panic, core-dump readout, minimum-heap and largest-free-block
-tracking, die temperature, an HTTP request counter, and a WiFi on/off duty
-test to compare radio-quiet windows with WiFi-up windows inside one run.
+---
 
-The application was innocent every time: heap flat at 28 to 32 KB, temperature
-flat, no requests served. The crashes were a **controller assert in the
-prebuilt classic-Bluetooth stack** (`ASSERT_PARAM rwbt.c:393`) and interrupt
-watchdog stalls inside its level-4 interrupt, under continuous inquiry with
-WiFi coexistence. Desk conditions reproduced it, which ruled out the
-environment.
+## How it works
 
-Retiring continuous inquiry is the fix. The BLE build does exactly that, and
-ran **25 h clean** in the same spot (versus four crashes in 9.5 h for classic),
-with heap fragmentation flat. The classic radio is left compiled in but
-unused, because the Arduino core's prebuilt BT libraries refuse a BLE-only
-controller configuration.
+```
+ car ──▶ [beacon ESP32 on switched USB: BLE advertising, fixed MAC, +9 dBm]
+                          │  radio
+                          ▼
+ garage  [scanner ESP32: passive BLE scan, filtered to that one MAC]
+                          │  RSSI trail
+                          ▼
+         [arrival logic: away ≥ 10 min, then a rising approach ramp]
+                          │  strict verdict, run-mode gate, lockout
+                          ▼
+         [GPIO 26 ── 330 Ω ── PC817 ── across the remote's button pads]
+                          │
+                          ▼
+         [spare remote, own battery]  ──▶  a normal rolling-code press  ──▶  door
+```
 
-### 3.5 In-car range test: the car body is a 20 dB wall (2026-08-29)
+The scanner only fires on an **arrival**: the beacon must have been absent
+for at least 10 minutes, then heard several times with a rising signal that
+crosses a threshold. A parked car is silent (its USB is off), so "absent"
+covers both "away" and "in the garage". Someone opening the parked car's door
+powers the beacon for a few seconds at a strong, flat level; that signature is
+recognised and explicitly refused. After any press the door state is unknown,
+so nothing fires again until a full absence and a fresh arrival.
 
-A phone advertising at +1 dBm rode in the car at the planned beacon position.
-The scanner sat at a window at the bottom of the ramp, logging every
-advertiser in 5 s buckets. One full drive-out, wait, drive-in cycle:
+Departures are not automated. You press the remote in the car as before.
 
-| Phase | Phone-in-car RSSI |
+**One caveat you must understand before building this.** A remote press is
+a *step* command on most garage controllers, not an *open* command: closed →
+opens, open → closes, moving → stops. The scanner has no door sensor in this
+version, so if the door was left open when the car arrives, the press closes
+it. The design compensates by only firing when the driver is present and
+watching, with a remote in hand to correct it. If that bothers you, the
+firmware has a stubbed input for a wired door-closed contact (see "Adapting
+it").
+
+---
+
+## Build
+
+### 1. Flash the beacon
+
+```bash
+cd firmware
+pio run -e beacon -t upload
+pio device monitor
+```
+
+The serial banner prints the board's burned-in Bluetooth address and the
+transmit power read back from the radio (it should say +9 dBm). Write the
+address down: it goes into the scanner's config as `BEACON_BLE_MAC`. Plug the
+beacon into the car's USB socket. It needs nothing else: no WiFi, no
+configuration, and it tolerates losing power at any moment.
+
+### 2. Configure and flash the scanner
+
+```bash
+cp firmware/include/config.example.h firmware/include/config.h
+```
+
+Fill in `config.h`: WiFi credentials, the beacon address, an OTA password and
+a control token of your choosing. The file is gitignored so nothing personal
+leaves your machine. Then:
+
+```bash
+cd firmware
+pio run -e logger-ble -t upload
+```
+
+`logger-ble` is the **listen-only** build: it runs the full arrival logic but
+can only log, and it never drives a pin. Open `http://bluedoor.local` on your
+LAN to see the status page: state, counters, last sighting, and a tail of the
+event log. Later reflashes can go over the air:
+
+```bash
+pio run -e logger-ble -t upload --upload-port bluedoor.local
+```
+
+### 3. Find the mounting spot
+
+The scanner needs three things: USB power, radio reach to where the car
+approaches, and RF reach from the remote to the door. Place it, then drive
+out and back in. Every sighting of the beacon is logged with its signal
+strength, and the `SURVEY` census lines list every advertiser heard with a
+first/best/last RSSI trail, so you can read the whole approach out of the log
+without knowing anything in advance.
+
+What you are looking for: as the car approaches, the beacon's RSSI should rise
+by 6 dB or more over at least three sightings and end above the trigger
+threshold (`RSSI_TRIGGER_DBM`, default −90 dBm for the beacon). If it never
+crosses the threshold, move the scanner closer to the approach path or loosen
+the threshold. Expect a closed garage door and the car's body to each cost
+around 20 dB.
+
+Leave it running for a few days. Every real arrival should produce a
+`VERDICT WOULD OPEN (strict)` line; nothing else should. Use the **Mark**
+button on the status page to annotate real arrivals so you can compare.
+
+### 4. Wire the remote
+
+Follow [wiring-v1.html](wiring-v1.html). The short version:
+
+1. Enroll your new daily-carry remote on the door first. The old remote is
+   often the programming key, and it has to survive until this is done.
+2. Open the old remote. Find the button that operates the door. With the
+   multimeter, identify its two contact pads and which one is positive
+   relative to the other with the battery in.
+3. Solder two thin leads to those pads. Keep the remote's own battery.
+4. Build the small assembly: GPIO 26 → 330 Ω → PC817 pin 1; PC817 pin 2 → GND;
+   10 kΩ between GPIO 26 and GND; PC817 pin 4 (collector) → the positive pad;
+   PC817 pin 3 (emitter) → the negative pad. The output side is directional:
+   backwards, nothing burns but the button never presses.
+5. Push the two jumpers onto the ESP32's GPIO 26 and GND header pins. Nothing
+   is soldered to the ESP32 itself.
+
+The 10 kΩ pulldown is not optional. Without it the pin floats during boot,
+and a power cut could open your garage on its own when the power returns.
+
+### 5. Commission
+
+```bash
+cd firmware
+pio run -e v1-ble -t upload --upload-port bluedoor.local
+```
+
+`v1-ble` is the production build. It boots in **DRY-RUN**: arrival verdicts
+are logged as "pulse suppressed" and the pin is never driven. Three modes,
+switchable on the status page with your control token:
+
+| Mode | Behaviour |
 |---|---|
-| In the garage, through the wall | −90 to −95, dense |
-| Closest pass, exiting at the door | −79 to −83 |
-| Away, a short distance from the house | silent for 66 s |
-| Return descent, door wait, park | −84 to −88 |
+| `DISABLED` | never pulses, not even manually |
+| `DRY-RUN` | full logic, pulse suppressed and logged (default on first boot) |
+| `LIVE` | pulses on a strict arrival verdict |
 
-The same phone in a pocket, walked past the same window, peaked at −64. The
-**car body costs about 20 dB**, on top of the 20 dB the closed door was
-already measured to cost. Consequences:
+1. Stand at the door with a working remote in hand and use the **manual
+   pulse** button on the status page. The door should respond to a 250 ms
+   press. Ignores it: lengthen `PULSE_MS`. Double-triggers: shorten it.
+   Every pulse logs an electrical self-check of the pin and the optocoupler
+   path, which is the first place to look if nothing happens.
+2. Leave it in DRY-RUN for a week. Check every suppressed verdict against
+   reality.
+3. When the log is clean, switch to LIVE.
 
-- An in-car transmitter at phone power never crosses the original −80 dBm
-  trigger. The trigger for the beacon build moved to about **−90 dBm**, with
-  the rising-ramp signature doing the real work. Identity comes from the
-  fixed address, so a loose threshold cannot let another device false-trigger.
-- At +9 dBm the beacon should read about −84 in the garage and −77 to −80 at
-  the door. Opening during the descent is solid; street-range detection is
-  borderline and is what the field week must answer.
-- The timing budget is tight: descent about 3 s, then 4 to 10 s waiting at
-  the door. Every second of street-range audibility is a second less waiting.
-
-The same session re-ran the classic radio alongside BLE during a real
-arrival. It heard nothing from the car at the best mounting spot it will ever
-have. The Phase 0.5 verdict stood.
-
-### 3.6 The beacon: a second ESP32 (2026-08-29 to 30)
-
-AirTag, Tile and SmartTag were rejected because they rotate their addresses.
-The beacon has to be something with a burned-in public address, and a second
-ESP32 board costs €13. Verified on the bench:
-
-- +9 dBm confirmed by **reading the TX power back from the controller**, not
-  by trusting the value requested. The whole link budget rests on that number
-  and a silently clamped radio looks identical to a working one otherwise.
-- Name carried in the advertising packet itself, not a scan response. The
-  advertising type is non-connectable and cannot answer scan requests, so the
-  passive-scanning logger is guaranteed to see the name.
-- **1.0 s from cold reset to the first advertisement heard** by an outside
-  scanner. That number matters because the car's USB power comes and goes.
-
-The car's USB is **switched**: about 10 to 15 s of grace after ignition off,
-and a door opening re-powers it until about 10 s after the door closes. So a
-parked car is a *silent* beacon, which turns out to be a feature. "Away for
-10 minutes" arms the system whether the car is gone or garaged. The
-wake-in-place refusal's one remaining job is the door-open blip: someone
-rummaging in the parked car powers the beacon for 10 to 20 s of strong, flat
-signal, which must be refused. Its threshold moved to −85 dBm for the beacon
-build so it can actually fire.
-
-### 3.7 The remote and the pulse circuit (2026-09-01 to 05)
-
-The sacrificial remote is a 2010-era BFT MITTO 12V-UP: 433.92 MHz SAW
-resonator, a single 12 V cylindrical cell, and four surface-mount tact
-switches with large, easy pads. Measured before soldering: the enrolled
-switch has five pads, two per contact group plus the metal shell. With the
-battery in, one group sits at about +12 V relative to the other, which fixes
-the optocoupler polarity: collector to the positive pad, emitter to the
-negative. The optocoupler isolates the two circuits completely; the remote
-runs above 3.3 V and is never powered from the ESP32.
-
-The pulse circuit (PC817, 330 Ω series resistor, 10 kΩ pulldown) was soldered
-dead-bug onto flying leads and bench-verified: about 6 mA through the LED,
-0.08 V across the output in diode mode, which is saturated, "button pressed".
-
-**First door opening from the ESP32: 2026-09-05.** A manual pulse from the
-web page lit the remote's LED and opened the door. Getting there took a
-stage-by-stage bench debug down to one open solder joint on the pad-4 lead,
-after a splayed jumper contact had spent an hour faking a dead GPIO pin. Once
-re-soldered, four plain 250 ms pulses beside the door opened it four times.
-
-One lesson from that afternoon is baked into the firmware: pulses the door
-cannot hear still advance the remote's rolling-code counter, and past 16
-unheard presses the receiver wants two consecutive presses to resync. So
-test pulses only within range, and never let an arrival pulse become a double
-pulse, because BFT step logic makes the second press a *stop*. Resync is a
-manual action only.
+Test pulses only within range of the door. Presses the door cannot hear still
+advance the remote's rolling-code counter, and after enough of them the
+receiver wants two consecutive presses to resync.
 
 ---
 
-## 4. The arrival state machine
+## Tuning
 
-The rules, all tunable in [tunables.h](firmware/include/tunables.h):
+Everything lives in [firmware/include/tunables.h](firmware/include/tunables.h)
+and is documented there. The ones that matter:
 
-- **Boot disarmed.** After any power-up or reset, nothing can fire until a
-  confirmed away period (no sightings for 10 minutes) has been observed. The
-  first sighting after boot is never an arrival.
-- **Arrival = absence, then a ramp.** At least 10 minutes without a sighting,
-  followed by an approach signature: three or more sightings with the RSSI
-  rising at least 6 dB and crossing the trigger threshold (−90 dBm on the
-  beacon build).
-- **Wake-in-place refusal.** An encounter that starts already strong and stays
-  flat (within 4 dB) is the parked-car signature. It latches the whole
-  encounter as non-fireable and is logged as an explicit `REFUSE`.
-- **A relaxed rule runs in parallel**, only for logging: two sightings above
-  the threshold within a minute, no ramp required. Its purpose is to compare
-  the two rules against ground truth, so the choice is made by data.
-- **Post-pulse lockout.** After any pulse, automatic or manual, the door
-  state is unknown. No further pulses until a full away period and a fresh
-  arrival.
-- **Arrival only.** Departures use the normal remote in the car, by design.
-  Engine start inside the closed garage is a sustained signal with no
-  preceding absence and does not fire.
-
-Every rule was chosen against a concrete failure mode seen or anticipated in
-the logs: reboots, someone opening the parked car, a neighbour's device, and
-the drive-away that fooled the relaxed rule in week one.
-
----
-
-## 5. Safety design
-
-This opens a house. The firmware treats it like a lock.
-
-- **Run modes** `DISABLED`, `DRY-RUN`, `LIVE`, persisted in flash. First boot
-  is `DRY-RUN`, where verdicts log "pulse suppressed" and nothing moves. A
-  reboot never escalates the mode.
-- **Dry-run week first.** The armed system runs with the pulse disabled in
-  software until its log is clean against real arrivals.
-- **Boot safety on the pulse pin.** GPIO 26 is a non-strapping pin, driven
-  low first thing in setup, with a 10 kΩ hardware pulldown covering the
-  boot-ROM window. A boot, reset, or flash cycle can never press the button.
-- **Every pulse self-checks.** It logs a pad read-back and a load check (the
-  pin floats on its weak pull-up for a moment and the optocoupler LED must
-  drag it low), so a loose jumper or an open joint is visible in the log.
-- **Web controls are token-gated** and LAN-only. Controls stay refused while
-  the token in `config.h` is still the placeholder, and the page shows a red
-  banner if the token check is compiled out for bench work.
-- **OTA updates need a real password** or stay disabled. A blank or
-  placeholder password is logged as an error at boot.
-- **Detection never depends on WiFi.** WiFi loss stops the status page, not
-  the state machine.
-- **The physical remotes and the key are untouched** and remain the fallback.
-
----
-
-## 6. Hardware
-
-Full list with quantities, prices and the wiring map in
-[COMPONENTS.md](COMPONENTS.md). The visual guide in
-[wiring-v1.html](wiring-v1.html) is meant to be opened at the bench.
-
-| Part | Role | Approx. |
+| Tunable | Default | What it does |
 |---|---|---|
-| ESP32-WROOM-32E dev board (Freenove FNK0090) × 2 | scanner + beacon | €13 each |
-| PC817 optocoupler | isolated "finger" on the remote button | €1 |
-| 330 Ω and 10 kΩ resistors | LED series, GPIO pulldown | pennies |
-| BFT MITTO 12V-UP remote | already owned, sacrificed to the project | €0 |
-| Replacement daily-carry remote (BFT MITTO COOL C2) | the one purchase that replaces something | €15 to €25 |
-| Hookup wire, heat-shrink, jumpers, a box | assembly | €5 |
+| `AWAY_MIN_MS` | 10 min | absence required before the system arms |
+| `RSSI_TRIGGER_DBM` | −90 (beacon) | the approach must cross this level |
+| `APPROACH_MIN_SIGHTINGS` / `APPROACH_MIN_RISE_DB` | 3 / 6 dB | the "rising ramp" definition |
+| `WAKE_STRONG_DBM` / `WAKE_FLAT_DB` | −85 / 4 dB | the "parked car woken in place" signature, refused |
+| `PULSE_MS` | 250 ms | button press length |
+| `BLE_SURVEY` | 1 | log every advertiser heard (turn off once commissioned) |
 
-The board must be an original ESP32 with a classic Bluetooth radio for the
-Phase 0 experiments. The C3, S3, C6 and H2 variants are BLE-only. In
-hindsight, since the final design is BLE-only, a BLE-only board would work
-for the beacon.
-
----
-
-## 7. Firmware
-
-One PlatformIO project, five build targets. See
-[firmware/README.md](firmware/README.md) for the log format and design notes.
-
-| Target | Purpose |
-|---|---|
-| `logger` | Phase 0.5 would-open logger on the classic radio. Log only, no GPIO. |
-| `logger-ble` | Same logger, watching the BLE beacon. The current field build. |
-| `survey` | BLE census plus classic inquiry, for attended drive-through tests. Runs the coexistence mix that crashes the controller; never left unattended. |
-| `v1` | Production. Same pipeline plus run modes, token-gated web controls, the GPIO 26 pulse, and the post-pulse lockout. |
-| `beacon` | The second board, carried in the car. |
-
-Quick start:
-
-```bash
-cp firmware/include/config.example.h firmware/include/config.h   # then fill it in
-```
-```bash
-cd firmware && pio run -e beacon -t upload      # beacon board; note the MAC it prints
-```
-```bash
-cd firmware && pio run -e logger-ble -t upload  # scanner board
-```
-
-The status page is served at `http://bluedoor.local` on the LAN. After the
-first USB flash, later builds go over the air with `--upload-port
-bluedoor.local`, which is how the logger box becomes the production box
-without leaving its mounting spot.
-
-The census mode (`BLE_SURVEY` in tunables) logs every advertiser it hears with
-an RSSI trail, which made all the range tests reflash-free: drive up with any
-advertiser and read its trail out of the log.
+Reading the log: `SIGHT` lines are beacon sightings with a trend label,
+`ENC` lines summarise an encounter while armed, `VERDICT` / `RELAXED` /
+`REFUSE` are the three outcomes, `PULSE` and `MODE` are the actuator, `STATE`
+is the arm/disarm machine, `HB` is a half-hourly heartbeat. Full table in
+[firmware/README.md](firmware/README.md).
 
 ---
 
-## 8. Security and privacy
+## Safety and security
 
-- A Bluetooth address is spoofable by someone who deliberately sniffs the
-  car. This is **convenience-lock grade**. The absence-then-ramp requirement
-  defeats naive replay and wake-in-place tricks; it does not defeat a
-  determined attacker with a radio. Free hardening options if ever wanted:
-  AND a second signal such as a phone geofence, or an authenticated
-  connection to the beacon.
-- The scanner is non-connectable and non-discoverable. Other devices'
-  addresses are never logged outside the explicit census mode, only anonymous
-  counts.
-- **Nothing identifying is in this repository.** Addresses, WiFi
-  credentials and tokens live in the gitignored `config.h`; the example file
-  holds placeholders only. Site photos and the private planning notes are
-  excluded, and the history was rewritten before publication. Do not publish
-  your own copy of `config.h`, and strip GPS EXIF from any photo you add.
-
----
-
-## 9. Lessons
-
-- **Test at the level that will run in production, early.** Phone-level
-  discoverability said yes; the ESP32 said no. The one-week logger cost
-  nothing but a board that was needed anyway, and it stopped the project from
-  buying parts for a design that could not work.
-- **Log what the radio heard, not just what matched.** The census lines
-  ("heard nothing" versus "was not listening") were what turned a silent log
-  into a diagnosis.
-- **Read hardware settings back.** The beacon's TX power is confirmed from the
-  controller, not from the value asked for.
-- **A stable prebuilt binary blob is still a binary blob.** The controller
-  crash was invisible from the application side; reset-reason forensics and
-  breadcrumbs in RTC RAM were what pointed at it.
-- **Bench debugging is mostly connectors.** A splayed jumper contact cost an
-  hour by faking a dead pin. Flux crust under the probe tips made good joints
-  read open. Every pulse now logs its own electrical self-check.
-- **Rolling codes count presses you cannot hear.** Test within range.
+- **Boot safety.** GPIO 26 is a non-strapping pin, driven low first thing at
+  boot, with the hardware pulldown covering the boot-ROM window.
+- **Disarmed after every reset** until a full absence has been observed.
+- **Lockout after every press**, manual or automatic.
+- **Web controls need a token** and are LAN-only. They stay refused while the
+  token in `config.h` is the placeholder. OTA needs a real password or stays
+  off.
+- **Detection never depends on WiFi.** Losing WiFi loses the status page, not
+  the arrival logic.
+- **This is convenience-lock grade.** A Bluetooth address can be spoofed by
+  someone who deliberately sniffs your car and then fakes an approach after a
+  real absence. It defeats casual replay, not a determined attacker with a
+  radio. Your physical remotes and key are untouched and remain the fallback.
+  Free hardening options if you want them: require a second signal such as a
+  phone geofence, or authenticate the beacon.
+- **Privacy.** The scanner is non-connectable and non-discoverable. Outside
+  the census mode, other devices' addresses are never logged, only counts.
 
 ---
 
-## 10. Status and next steps
+## Adapting it
 
-Done:
+- **Another remote.** Any remote with a push button. Measure the button's
+  pad polarity with the battery in; collector to the positive pad. If the
+  remote runs from a coin cell below 3.3 V the PC817 still works; if it runs
+  above 5 V (the MITTO uses a 12 V cell) that is exactly why the optocoupler
+  is there. Never power the remote from the ESP32.
+- **Always-on car USB.** The parked car will then keep advertising. The
+  wake-in-place refusal still protects you from a parked car, but "absence"
+  never happens at home, so the system cannot re-arm while the car is in the
+  garage. Either power the beacon from a source that switches (a 12 V
+  accessory socket through a buck converter), or add the door-closed contact
+  below and rework the arming rule.
+- **A door sensor.** `REED_ENABLED` in tunables, GPIO 27, an alarm-type
+  magnetic contact to ground. The input is already plumbed as a hard
+  interlock: never pulse unless the door reads closed.
+- **A different board.** The firmware is written against the original ESP32
+  (WROOM-32, dual-mode controller). The beacon is plain BLE advertising and
+  should port to any ESP32 variant; the scanner uses the dual-mode controller
+  API and has only been run on the WROOM-32.
+- **Timing.** From "first heard" to "door fully open" you get a handful of
+  seconds of warning. Whether the door is open when you reach it or still
+  opening depends on your approach geometry and door speed. The scanner's
+  position is the main lever.
 
-- Car found and characterised; the car's own radio ruled out by measurement.
-- Scanner stable (25 h soak) on the BLE build.
-- Beacon commissioned: +9 dBm confirmed, 1.0 s cold start, fixed address.
-- Remote mapped, pulse circuit built, **door opens on a 250 ms pulse**.
-- Door step logic confirmed in every state.
+---
 
-Next:
+## Design notes
 
-1. Box the scanner and mount it in the garage.
-2. Beacon in the car on switched USB; scanner on `logger-ble` in dry-run.
-3. A week of real arrivals against the log. Street-range audibility at +9 dBm
-   decides whether the door is fully open on arrival or still opening during
-   the descent.
-4. Enroll the replacement daily-carry remote, then move the sacrificial
-   remote permanently into the box.
-5. Flip to `LIVE` only when the dry-run log is clean.
-6. v2, only if v1 annoys: wired reed contact as a hard "door closed"
-   interlock (GPIO 27, already stubbed).
+Short answers to "why not X", in case you were about to try X.
+
+- **Why not the car's own Bluetooth?** It was the first design. The car's
+  head unit is classic Bluetooth, answers discovery only while parked with
+  someone inside, never while driving, and is about 35 dB weaker than a
+  phone. So it is visible exactly when it must not fire and invisible when it
+  must. Measured over a week of logging with a phone as a positive control.
+- **Why an ESP32 as the beacon and not an AirTag or Tile?** Those rotate
+  their addresses. The ESP32 has a burned-in public address, transmits at
+  +9 dBm, and starts advertising within a second of power-up, which matters
+  on a switched USB socket.
+- **Why BLE scanning rather than classic inquiry on the scanner?** Continuous
+  classic inquiry alongside WiFi crashes the ESP32's prebuilt Bluetooth
+  controller every one to three hours (a controller assert under coexistence).
+  The BLE build ran a 25 h soak clean.
+- **Why an optocoupler on a real remote instead of emulating the remote's
+  radio?** Enrolling a synthetic transmitter writes to the door's receiver,
+  which breaks the "untouched" rule, and it needs a sub-GHz radio the ESP32
+  lacks. The optocoupler changes nothing on the door side.
+- **Why the ramp requirement rather than a simple threshold?** A threshold
+  alone fires on a parked car being opened, and on noise at the edge of range.
+  Requiring absence, then a rise of several dB over several sightings, is
+  what distinguishes an approach from everything else seen in the logs.
 
 ---
 

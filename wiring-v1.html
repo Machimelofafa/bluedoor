@@ -329,12 +329,12 @@ a{color:var(--warm);}
       <text x="230" y="220" text-anchor="middle" class="t-note">read from the end where the stripes are bunched together</text>
     </svg>
   </div>
-  <figcaption><b>Telling the two resistors apart</b> — drawn as the actual parts on hand: blue 5-band 1% metal film (verified from photos, 2026-08-31). The lone brown tolerance stripe sits apart at the far end, and since brown can appear at both ends, the quick tell is: <b>two orange stripes = 330 Ω, a red stripe = 10 kΩ</b>. If ever in doubt, the multimeter settles it in seconds. Unlike the PC817, resistors have no direction: either way round is fine.</figcaption>
+  <figcaption><b>Telling the two resistors apart</b> — drawn as blue 5-band 1% metal-film parts; 4-band beige ones read the same way without the extra digit. The lone brown tolerance stripe sits apart at the far end, and since brown can appear at both ends, the quick tell is: <b>two orange stripes = 330 Ω, a red stripe = 10 kΩ</b>. If ever in doubt, the multimeter settles it in seconds. Unlike the PC817, resistors have no direction: either way round is fine.</figcaption>
 </figure>
 
 <section class="col">
   <h2>The remote's side, as measured</h2>
-  <p>The MITTO's board carries four surface-mount switches around the slot for its single 12 V cell. The one enrolled on the door is the <strong>upper-left switch with the remote held nose up</strong> — beside the "IMEX" print and two large solder-blob holes. It has <strong>five pads, not two</strong>, and they were mapped with the multimeter on 2026-09-03.</p>
+  <p>The MITTO's board carries four surface-mount switches around the slot for its single 12 V cell. The one enrolled on the door is the <strong>upper-left switch with the remote held nose up</strong> — beside the "IMEX" print and two large solder-blob holes. It has <strong>five pads, not two</strong>, and they were mapped with the multimeter.</p>
   <p>Battery out, button up: pads 1 and 5 beep to each other, pads 3 and 4 beep to each other, pad 2 is only the metal case. Button pressed: 1–3, 5–3 and 1–4 all beep — the two groups join. Battery in, button up, red probe on pad 4 and black on pad 5: about <strong>+12 V</strong>. So the 3/4 group is the + side of the switch.</p>
   <p>That fixes the wiring: <strong>PC817 pin 4 → pad 4, PC817 pin 3 → pad 5.</strong> Both sit on the switch's bottom edge, apart from each other and well away from the case pad. Pads 3 and 1 are the same nets as 4 and 5 — spares if a pad ever lifts.</p>
 </section>
@@ -384,7 +384,7 @@ a{color:var(--warm);}
       <text x="372" y="300" class="t-note">seen from above, remote held nose up</text>
     </svg>
   </div>
-  <figcaption><b>The enrolled switch, pad by pad.</b> Numbering follows the owner's sketch. A tact switch has two contact groups; each group reaches two pads, which is why 1 and 5 beep unpressed and 3 and 4 beep unpressed. The fifth pad is the shell, which wraps the whole body — nothing may touch it.</figcaption>
+  <figcaption><b>The enrolled switch, pad by pad.</b> The numbering is ours, for this guide. A tact switch has two contact groups; each group reaches two pads, which is why 1 and 5 beep unpressed and 3 and 4 beep unpressed. The fifth pad is the shell, which wraps the whole body — nothing may touch it.</figcaption>
 </figure>
 
 <figure class="fig-half" style="max-width:680px">
@@ -402,7 +402,7 @@ a{color:var(--warm);}
       <rect x="418" y="62" width="149" height="50" rx="3" fill="var(--surface2)" stroke="var(--rule)"/>
       <text x="492" y="99" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="24" font-weight="600" fill="var(--ink)">+12 V</text>
       <text x="492" y="135" text-anchor="middle" class="t-sub">multimeter — DC volts</text>
-      <text x="492" y="153" text-anchor="middle" class="t-note">measured 2026-09-03</text>
+      <text x="492" y="153" text-anchor="middle" class="t-note">measure it yourself</text>
 
       <path d="M400,80 Q265,48 116,139" stroke="#C0392B" stroke-width="2.5" fill="none"/>
       <circle cx="116" cy="139" r="4.5" fill="#C0392B"/>
@@ -412,7 +412,7 @@ a{color:var(--warm);}
       <text x="300" y="222" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="11.5" font-weight="600" fill="var(--ink)">BLACK probe</text>
     </svg>
   </div>
-  <figcaption><b>Red on pad 4, black on pad 5, positive → pad 4 is the + side.</b> This is the one reading the whole build hangs on, and it has been taken. Repeat it once more right before the iron gets hot: it costs ten seconds, and the PC817's switch side only conducts with pin 4 on the higher pad.</figcaption>
+  <figcaption><b>Red on pad 4, black on pad 5, positive → pad 4 is the + side.</b> This is the one reading the whole build hangs on. Take it yourself right before the iron gets hot, even if your remote is the same model: it costs ten seconds, and the PC817's switch side only conducts with pin 4 on the higher pad.</figcaption>
 </figure>
 
 <section class="col">
@@ -681,13 +681,13 @@ a{color:var(--warm);}
   <ol class="steps">
     <li><b>Enroll the new remote.</b> MITTO COOL C2, using the old remote as the programming key. Test it on the door several times. Nothing else in this list depends on it, but the old remote must survive everything below until this is done.</li>
     <li><b>Range-check the old remote</b> from the spot where the ESP32 will live. If the door doesn't respond from there, the mounting spot moves — not the plan.</li>
-    <li><b>Open the old remote — done 2026-09-03.</b> Board photographed, the cell is a single 12 V cylinder: buy a spare. The door's step logic was confirmed at the same time: closed → opens, open → closes, moving → stops, stopped mid-travel → reverses.</li>
-    <li><b>Measure the pads — done 2026-09-03.</b> Pad map in the switch figure: pin 4 → pad 4 (+12 V), pin 3 → pad 5. Repeat the one reading before soldering: red on pad 4, black on pad 5, positive. The switched current was not measured; a remote's button feeds a logic input, microamps against the PC817's 50 mA limit. Measure it if the meter has a µA range, otherwise accept.</li>
-    <li><b>Build the small assembly — done 2026-09-01.</b> PC817 with the 330 Ω on pin 1 and the 10 kΩ across the GPIO/GND leads, dead-bug soldered onto the pigtails and bench-verified. Still owed: a wiggle test on each joint, and sleeving the two bare GPIO-node leads.</li>
+    <li><b>Open the old remote.</b> Note the battery type and buy a spare (the MITTO 12V-UP takes a single 12 V cylindrical cell). Test the door's step logic with the remote while you are at it: on this door, closed → opens, open → closes, moving → stops, stopped mid-travel → reverses.</li>
+    <li><b>Measure the pads.</b> Pad map in the switch figure: pin 4 → pad 4 (+12 V), pin 3 → pad 5 on the MITTO 12V-UP. Take the one reading yourself before soldering: red on pad 4, black on pad 5, positive. The switched current was not measured; a remote's button feeds a logic input, microamps against the PC817's 50 mA limit. Measure it if the meter has a µA range, otherwise accept.</li>
+    <li><b>Build the small assembly.</b> PC817 with the 330 Ω on pin 1 and the 10 kΩ across the GPIO/GND leads, dead-bug soldered onto the pigtails. Bench check: drive the LED side from 3V3 through the 330 Ω and read pins 4–3 in diode mode — well under 0.2 V means the switch is closed. Wiggle every joint, and sleeve the two bare GPIO-node leads.</li>
     <li><b>Solder the two leads to pads 5 and 4.</b> The step list in "At the remote" above, in that order. Then the two meter checks, the hot glue, the tape.</li>
     <li><b>Join leads to the PC817.</b> Red lead to pin 4 (J4), dark lead to pin 3 (J5), heat-shrink over both. Battery in, ESP32 still unplugged: the plunger works the door, nothing happens on its own.</li>
     <li><b>Jumper it onto the ESP32.</b> The pigtails' female ends push straight onto the board's male header pins — GPIO 26 and GND. The board has several GND pins and they are all the same point electrically: use the one on the same side as GPIO 26 so both connectors sit on one edge. Never solder the ESP32 itself.</li>
-    <li><b>Flash the beacon-aware production build.</b> <code style="font-family:var(--mono);font-size:14px">pio run -e v1-ble -t upload</code>. Plain <code style="font-family:var(--mono);font-size:14px">v1</code> watches only the classic radio, which the logger weeks proved cannot see an arrival.</li>
+    <li><b>Flash the beacon-aware production build.</b> <code style="font-family:var(--mono);font-size:14px">pio run -e v1-ble -t upload</code>. Plain <code style="font-family:var(--mono);font-size:14px">v1</code> is the classic-radio variant and is not what you want.</li>
     <li><b>Power up in DRY-RUN.</b> The firmware boots there by default and only logs. Watch it for a session before touching the mode.</li>
     <li><b>First real press, supervised.</b> Start with the door closed. Stand at the door, working remote in hand, and use the manual pulse. A press is a step command: closed opens, open closes, moving stops — be ready to correct it. Door ignores the press → lengthen the pulse; double-triggers → shorten it.</li>
     <li><b>Box it up.</b> ESP32 and remote in one small box, one hole for the USB cable, nothing pressing on any of the remote's four plungers.</li>
@@ -696,7 +696,7 @@ a{color:var(--warm);}
 
 <hr>
 <section class="col">
-  <p class="t-note" style="font-size:14px;color:var(--ink2)">Companion to <b>COMPONENTS.md</b> and the project report, <b>README.md</b>. Build v1 is deliberately minimal: no door sensor, arrival only, and the door keeps its normal remotes and physical key as fallback throughout. Remote pad map and polarity measured 2026-09-03; assembly bench-verified 2026-09-01.</p>
+  <p class="t-note" style="font-size:14px;color:var(--ink2)">Companion to <b>COMPONENTS.md</b> and the project report, <b>README.md</b>. Build v1 is deliberately minimal: no door sensor, arrival only, and the door keeps its normal remotes and physical key as fallback throughout. The pad map is for the BFT MITTO 12V-UP; other remotes differ, the method does not.</p>
 </section>
 
 </div>
