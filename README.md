@@ -79,9 +79,9 @@ for at least 10 minutes, then heard several times with a rising signal that
 crosses a threshold. A parked car is silent (its USB is off), so "absent"
 covers both "away" and "in the garage", and a departure climbs past the
 scanner exactly like an arrival. The scanner therefore also tracks whether the
-car is **home or away** from how each beacon session ends: a pass by the
-scanner followed by silence at the parked level means it came in, a pass
-followed by fading out means it left. While the car is home nothing fires, so
+car is **home or away** from the shape of each beacon session: heard briefly,
+then a pass by the scanner, then a long parked tail means it came in; a long
+idle, a pass, then gone in seconds means it left. While the car is home nothing fires, so
 starting the car in the garage or opening its door never presses the button.
 After any press the door state is unknown, so nothing fires again until a
 full absence and a fresh arrival.
@@ -223,7 +223,7 @@ and is documented there. The ones that matter:
 | `RSSI_TRIGGER_DBM` | −90 (beacon) | the approach must cross this level |
 | `APPROACH_MIN_SIGHTINGS` / `APPROACH_MIN_RISE_DB` | 3 / 6 dB | the "rising ramp" definition |
 | `APPROACH_MEDIAN_N` / `APPROACH_MIN_MS` | 4 / 2 s | the rise is between medians of the first and last N sightings, over at least this long |
-| `PRESENCE_TRANSIT_DBM` / `PRESENCE_AWAY_DBM` | −78 / −93 | a session peaking this strong is the car passing the scanner; ending at or below the second level means it left, else it parked |
+| `PRESENCE_TRANSIT_DBM` / `PRESENCE_QUIET_MS` | −75 / 60 s | a session peaking this strong is the car passing the scanner; longer heard after the pass than before means it parked, else it left |
 | `WAKE_STRONG_DBM` / `WAKE_FLAT_DB` | −85 / 4 dB | the "parked car woken in place" signature, refused |
 | `PULSE_MS` | 250 ms | button press length |
 | `BLE_SURVEY` | 0 | log every advertiser heard (set to 1 for a census while commissioning; it fills the log in an hour) |

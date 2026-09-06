@@ -81,17 +81,19 @@ Controls, each requiring `CONTROL_TOKEN`:
 ## How the scanner decides
 
 - **Disarmed at boot** until no sighting for `AWAY_MIN_MS` (10 min).
-- **Car presence, HOME or AWAY**, inferred from how each beacon session ends.
-  A parked car is silent, so absence alone cannot tell "away" from "in the
-  garage", and a departure (beacon powering on at the parked level, then the
-  car driving out past the scanner) climbs exactly like an arrival. A session
-  is one run of sightings separated by `PRESENCE_QUIET_MS` of silence. If it
-  contains a transit (peak at or above `PRESENCE_TRANSIT_DBM`, the car passing
-  the scanner) its ending level decides: a median of the last sightings at or
-  below `PRESENCE_AWAY_DBM` means the car drove out of range (AWAY), anything
-  stronger means it parked inside (HOME). Sessions without a transit change
-  nothing. **While HOME nothing fires.** Boot assumes HOME, so a reflash costs
-  at most one missed arrival; the status page can set presence by hand.
+- **Car presence, HOME or AWAY**, inferred from the shape of each beacon
+  session. A parked car is silent, so absence alone cannot tell "away" from
+  "in the garage", and a departure (beacon powering on at the parked level,
+  then the car driving out past the scanner) climbs exactly like an arrival.
+  A session is one run of sightings separated by `PRESENCE_QUIET_MS` of
+  silence. If it contains a transit (peak at or above `PRESENCE_TRANSIT_DBM`,
+  the car passing the scanner) the time around that peak decides: an arrival
+  is heard for seconds, passes, then sits parked with the engine on, so it is
+  longer after the peak than before (HOME); a departure idles inside, passes,
+  and is out of range in seconds (AWAY). Received level cannot do this, the
+  parked and ramp-top bands overlap. Sessions without a transit change
+  nothing. **While HOME nothing fires.** Boot assumes HOME, so a reflash
+  costs at most one missed arrival; the status page can set presence by hand.
 - **Strict arrival** (the only thing that fires): car AWAY, absence, then an
   encounter of at least `APPROACH_MIN_SIGHTINGS` sightings and
   `APPROACH_MIN_MS`, whose median of the last `APPROACH_MEDIAN_N` sightings is
@@ -134,7 +136,7 @@ Controls, each requiring `CONTROL_TOKEN`:
 | Tag | Meaning |
 |---|---|
 | `VERDICT WOULD OPEN (strict)` | The firing rule fired. In v1 builds, followed by a `PULSE` line (LIVE) or a suppression line (DRY-RUN / DISABLED). `strict rule met but car is HOME` is the same signature seen on a departure or a door blip, held back by presence. |
-| `PRESENCE` | A beacon session ended: its count, duration, first and peak RSSI, ending median and the time from peak to last sighting, and the resulting HOME / AWAY (or "no transit, unchanged"). |
+| `PRESENCE` | A beacon session ended: its count, duration, first and peak RSSI, ending median, the time before and after the peak, and the resulting HOME / AWAY (or "no transit, unchanged"). |
 | `RELAXED` | The no-ramp comparison rule would have fired here. Never actuates. |
 | `REFUSE` | Wake-in-place signature; the encounter is latched non-fireable. |
 | `PULSE` | Actual, suppressed, refused or manual pulses, with the pad read-back and load check. |

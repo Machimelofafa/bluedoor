@@ -60,19 +60,23 @@
 // the garage. On 2026-09-06 three departures (beacon powering on at the parked
 // level, car then driving out past the scanner) fired the strict rule, and
 // both real arrivals were lost to the lockouts those verdicts caused. Presence
-// is therefore tracked from how each beacon session ends. A session is one run
-// of sightings separated by PRESENCE_QUIET_MS of silence. A session with a
-// transit (peak >= PRESENCE_TRANSIT_DBM: the car passed the scanner, measured
-// -67..-73 in both directions; parked reads -83..-96) sets presence from its
-// ending level: the median of the last sightings at or below PRESENCE_AWAY_DBM
-// means the car drove out of range (AWAY), anything stronger means it parked
-// inside (HOME). Sessions without a transit (door-open blip, a wait at the top
-// of the ramp) change nothing. While HOME no encounter can fire. Boot assumes
-// HOME, so the failure after a reflash is a missed arrival, never a stray
-// press; the status page can set presence by hand.
-#define PRESENCE_QUIET_MS      (30u * 1000u)
-#define PRESENCE_TRANSIT_DBM   (-78)
-#define PRESENCE_AWAY_DBM      (-93)
+// is therefore tracked from the shape of each beacon session. A session is one
+// run of sightings separated by PRESENCE_QUIET_MS of silence (60 s: a
+// departure prep showed 40 s pauses). A session with a transit (peak >=
+// PRESENCE_TRANSIT_DBM: the car passing the scanner, measured -67..-73 both
+// ways; parked reads -83..-96, an idling fragment once peaked -77) sets
+// presence from the time before and after that peak. An arrival is heard for
+// seconds, passes, then sits parked with the engine on and the USB grace
+// (54..88 s measured). A departure idles inside (17..170 s), passes, and is
+// out of range in 7..12 s. So: longer after the peak than before = HOME, else
+// AWAY. Received level cannot do this (the parked and ramp-top bands overlap;
+// a level rule misread two of three transits on 2026-09-06). Sessions without
+// a transit (door-open blip, a wait at the top of the ramp) change nothing.
+// While HOME no encounter can fire. Boot assumes HOME, so the failure after a
+// reflash is a missed arrival, never a stray press; the status page can set
+// presence by hand.
+#define PRESENCE_QUIET_MS      (60u * 1000u)
+#define PRESENCE_TRANSIT_DBM   (-75)
 
 // ---- classic BT scanning ----
 // Inquiry length in 1.28 s units (4 = 5.12 s per cycle, restarted continuously)

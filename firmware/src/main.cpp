@@ -635,16 +635,20 @@ static void endSession() {
   if (!ses.active) return;
   ses.active = false;
   int8_t endMed = medianOf(ses.ring, ses.rN);
+  uint32_t head = ses.peakMs - ses.startMs, tail = ses.lastMs - ses.peakMs;
   String sum = String("session n=") + ses.count + " dur=" + fmtDur(ses.lastMs - ses.startMs) +
                " first=" + ses.firstRssi + " peak=" + ses.peakRssi + " end~" + endMed +
-               " tail=" + fmtDur(ses.lastMs - ses.peakMs);
+               " before-peak=" + fmtDur(head) + " after-peak=" + fmtDur(tail);
   if (ses.peakRssi < PRESENCE_TRANSIT_DBM) {
     logEvent("PRESENCE", String("no transit (peak below ") + PRESENCE_TRANSIT_DBM +
                              "), presence unchanged: " + sum);
     return;
   }
-  if (endMed <= PRESENCE_AWAY_DBM) setPresence(false, "transit, then faded out: " + sum);
-  else setPresence(true, "transit, then parked level: " + sum);
+  // shape, not level: an arrival is brief before the pass and long after it
+  // (parks, engine on, USB grace); a departure idles before and is gone in
+  // seconds after
+  if (tail > head) setPresence(true, "transit, longer after the pass than before (parked): " + sum);
+  else setPresence(false, "transit, longer before the pass than after (drove off): " + sum);
 }
 
 // RSSI trajectory label: separates a drive-away (receding) from a
