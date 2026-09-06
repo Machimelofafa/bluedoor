@@ -91,7 +91,11 @@ Controls, each requiring `CONTROL_TOKEN`:
   encounter is latched non-fireable.
 - **Lockout** after any pulse until a full absence and a new arrival.
 - An encounter with no verdict ends after `ENCOUNTER_QUIET_MS` of silence or
-  `ENCOUNTER_MAX_MS` total.
+  `ENCOUNTER_MAX_MS` total. The scanner then re-arms after `REARM_NOVERDICT_MS`
+  (2 min) of silence instead of the full `AWAY_MIN_MS`: a car that waited at
+  the top of the ramp and left must not blind the scanner to its return. If
+  the beacon is heard at `WAKE_STRONG_DBM` or stronger while disarmed, the car
+  came in and parked, and the full absence applies again.
 
 ### Pulse safety (v1 builds)
 
@@ -119,7 +123,7 @@ Controls, each requiring `CONTROL_TOKEN`:
 | `PULSE` | Actual, suppressed, refused or manual pulses, with the pad read-back and load check. |
 | `MODE` | Run-mode changes and the mode restored at boot. |
 | `ENC` | Encounter (sighting cluster while armed) started or ended, with RSSI stats and a `trend=` label: approaching / receding / steady. |
-| `SIGHT` | Beacon sightings, aggregated per minute while disarmed, each with first→last RSSI and a trend label. A `went quiet` line timestamps when sightings stopped. |
+| `SIGHT` | Beacon sightings, aggregated per minute while disarmed, each with first→last RSSI and a trend label. A `went quiet` line timestamps when sightings stopped. A rising trail while disarmed (`disarmed ramp`) is logged peak by peak, with the trigger crossing, so an arrival the machine could not act on keeps its timing. |
 | `STATE` | DISARMED (boot / seen / lockout) ↔ ARMED transitions with reasons. |
 | `SURVEY` | Census (`BLE_SURVEY` on): every `BLE_SURVEY_MS`, one line per distinct advertiser heard, with sighting count, first/best/last RSSI, and the advertised name if any. A rising first→last across consecutive lines is an approach in progress. The `survey` target tags lines `BT` or `BLE`. |
 | `HB` | Half-hourly heartbeat: uptime, free heap and largest free block, web requests served, WiFi drops, allocation failures. A gap means a crash or power loss. |

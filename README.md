@@ -215,11 +215,12 @@ and is documented there. The ones that matter:
 | Tunable | Default | What it does |
 |---|---|---|
 | `AWAY_MIN_MS` | 10 min | absence required before the system arms |
+| `REARM_NOVERDICT_MS` | 2 min | shorter absence after an encounter that ended without a verdict (the car lingered in range and left) |
 | `RSSI_TRIGGER_DBM` | −90 (beacon) | the approach must cross this level |
 | `APPROACH_MIN_SIGHTINGS` / `APPROACH_MIN_RISE_DB` | 3 / 6 dB | the "rising ramp" definition |
 | `WAKE_STRONG_DBM` / `WAKE_FLAT_DB` | −85 / 4 dB | the "parked car woken in place" signature, refused |
 | `PULSE_MS` | 250 ms | button press length |
-| `BLE_SURVEY` | 1 | log every advertiser heard (turn off once commissioned) |
+| `BLE_SURVEY` | 0 | log every advertiser heard (set to 1 for a census while commissioning; it fills the log in an hour) |
 
 Reading the log: `SIGHT` lines are beacon sightings with a trend label,
 `ENC` lines summarise an encounter while armed, `VERDICT` / `RELAXED` /

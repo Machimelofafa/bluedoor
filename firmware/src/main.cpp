@@ -561,6 +561,7 @@ enum class SysState : uint8_t { DisarmedBoot, DisarmedSeen, DisarmedLockout, Arm
 
 static SysState sysState = SysState::DisarmedBoot;
 static uint32_t stateSinceMs = 0;
+static bool shortRearm = false;       // DisarmedSeen entered from a no-verdict encounter
 static uint32_t lastEvidenceMs = 0;   // any car evidence: inquiry sighting or page answer
 static uint32_t lastSightMs = 0;      // inquiry sightings only (these carry RSSI)
 static int8_t lastSightRssi = 127;
@@ -618,6 +619,7 @@ static void setState(SysState s, const String &why) {
   logEvent("STATE", String(stateName(sysState)) + " -> " + stateName(s) + " (" + why + ")");
   sysState = s;
   stateSinceMs = millis();
+  shortRearm = false;
 }
 
 static void flushAgg(const char *why) {
@@ -809,6 +811,23 @@ static void onCarSighting(int8_t rssi, const char *name) {
       agg.count = 0;
       agg.firstRssi = agg.minRssi = agg.maxRssi = rssi;
     }
+    // a rising trail while disarmed is an arrival the machine cannot act on:
+    // keep its timing. New peaks only (a few lines per approach), plus the
+    // moment it crosses the trigger, so a missed arrival can be read back
+    // against the ramp afterwards
+    if (agg.count > 0 && rssi > agg.maxRssi && (rssi - agg.firstRssi) >= APPROACH_MIN_RISE_DB) {
+      bool crossed = rssi >= RSSI_TRIGGER_DBM && agg.maxRssi < RSSI_TRIGGER_DBM;
+      logEvent("SIGHT", String(crossed ? "disarmed ramp crossed trigger, rssi " : "disarmed ramp, new peak rssi ") +
+                            String(rssi) + " (+" + String(rssi - agg.firstRssi) + " dB over " +
+                            fmtDur(now - agg.startMs) + ", sighting #" + String(agg.count + 1) +
+                            ") [" + stateName(sysState) + "]");
+    }
+    if (shortRearm && rssi >= WAKE_STRONG_DBM) {
+      shortRearm = false;
+      logEvent("STATE", "short re-arm cancelled: car heard at rssi " + String(rssi) +
+                            " while disarmed (came in and parked), full " +
+                            fmtDur(AWAY_MIN_MS) + " absence applies");
+    }
     agg.lastMs = now;
     agg.lastRssi = rssi;
     agg.count++;
@@ -851,9 +870,11 @@ static void machineTick() {
     if (now - enc.lastMs > ENCOUNTER_QUIET_MS) {
       endEncounter("went quiet");
       setState(SysState::DisarmedSeen, "encounter without verdict");
+      shortRearm = true;
     } else if (now - enc.startMs > ENCOUNTER_MAX_MS) {
       endEncounter("window expired, car lingering");
       setState(SysState::DisarmedSeen, "encounter without verdict");
+      shortRearm = true;
     }
   }
 
@@ -861,9 +882,14 @@ static void machineTick() {
   // timestamp instead of dissolving into the next period flush
   if (agg.active && now - agg.lastMs > SIGHT_AGG_QUIET_MS) flushAgg("went quiet");
 
-  if (sysState != SysState::Armed && now - lastEvidenceMs >= AWAY_MIN_MS) {
+  // a no-verdict encounter (car lingered, then left) re-arms on the short
+  // timer; boot, lockout and a car that came in and parked need the full absence
+  bool shortNow = sysState == SysState::DisarmedSeen && shortRearm;
+  uint32_t need = shortNow ? REARM_NOVERDICT_MS : AWAY_MIN_MS;
+  if (sysState != SysState::Armed && now - lastEvidenceMs >= need) {
     flushAgg("state change");
-    setState(SysState::Armed, "no car evidence for " + fmtDur(now - lastEvidenceMs));
+    setState(SysState::Armed, "no car evidence for " + fmtDur(now - lastEvidenceMs) +
+                                  (shortNow ? " (short re-arm after no-verdict encounter)" : ""));
   }
 }
 

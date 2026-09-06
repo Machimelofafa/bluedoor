@@ -40,6 +40,14 @@
 // this much quiet, or this much total lingering
 #define ENCOUNTER_QUIET_MS     (90u * 1000u)
 #define ENCOUNTER_MAX_MS       (3u * 60u * 1000u)
+// After an encounter that ended WITHOUT a verdict (car lingered in range, then
+// left or went quiet), re-arm after this much silence instead of AWAY_MIN_MS.
+// 2026-09-06 00:38: the car waited 2 min at the ramp top (no ramp, no verdict),
+// went silent 4.5 min, then came down the ramp into a scanner still disarmed
+// for another 6 min. A verdict still enters the full lockout, and a sighting at
+// or above WAKE_STRONG_DBM while disarmed (the car came in and parked) cancels
+// the short re-arm, so the parked-car door-open blip keeps its 10 min cover.
+#define REARM_NOVERDICT_MS     (2u * 60u * 1000u)
 
 // ---- classic BT scanning ----
 // Inquiry length in 1.28 s units (4 = 5.12 s per cycle, restarted continuously)
@@ -117,7 +125,7 @@
 // records every address it hears while the census is on; set to 0 once
 // BEACON_BLE_MAC is commissioned. The env:survey build extends the census to
 // classic inquiry responses (lines tagged BT vs BLE) for drive-through tests.
-#define BLE_SURVEY             1
+#define BLE_SURVEY             0
 // 5 s buckets: an arrival is only a few seconds long, so drive-through tests
 // need street / approach / door-wait in separate buckets or the gradient
 // smears into one line. Widen to 20 s if a census build runs unattended for
