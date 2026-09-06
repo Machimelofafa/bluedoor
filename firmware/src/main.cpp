@@ -582,9 +582,11 @@ static struct {
   uint32_t startMs = 0, lastMs = 0;
   int8_t firstRssi = 0, lastRssi = 0, minRssi = 0, maxRssi = 0;
   uint16_t count = 0;
-  bool relaxedFlagged = false, wakeFlagged = false;
+  bool relaxedFlagged = false, wakeFlagged = false, homeFlagged = false;
   Sight recent[8];
   uint8_t rIdx = 0;
+  int8_t firstN[APPROACH_MEDIAN_N];   // the first sightings, for the ramp's start median
+  int8_t firstMed = 0, lastMed = 0;   // ramp medians, valid once count >= 2*APPROACH_MEDIAN_N
 } enc;
 
 // sighting aggregation while disarmed (keeps the log small when the car
@@ -595,6 +597,55 @@ static struct {
   uint16_t count = 0;
   int8_t firstRssi = 0, lastRssi = 0, minRssi = 0, maxRssi = 0;
 } agg;
+
+// car presence, inferred from how each beacon session ends (tunables.h,
+// "car presence"). A session spans every sighting, armed or not, until
+// PRESENCE_QUIET_MS of silence
+static bool carHome = true;                 // boot assumes home: safe side
+static uint32_t presenceSinceMs = 0;
+static String presenceWhy = "assumed at boot";
+static struct {
+  bool active = false;
+  uint32_t startMs = 0, lastMs = 0, peakMs = 0;
+  int8_t firstRssi = 0, peakRssi = -127;
+  uint16_t count = 0;
+  int8_t ring[8];
+  uint8_t rIdx = 0, rN = 0;
+} ses;
+
+static int8_t medianOf(const int8_t *v, int n) {
+  int8_t t[8];
+  if (n > 8) n = 8;
+  for (int i = 0; i < n; i++) t[i] = v[i];
+  for (int i = 1; i < n; i++)
+    for (int j = i; j > 0 && t[j - 1] > t[j]; j--) { int8_t x = t[j]; t[j] = t[j - 1]; t[j - 1] = x; }
+  return n ? t[(n - 1) / 2] : 0;
+}
+
+static void setPresence(bool home, const String &why) {
+  logEvent("PRESENCE", String("car ") + (home ? "HOME" : "AWAY") +
+                           (home == carHome ? " (unchanged)" : (home ? " (was AWAY)" : " (was HOME)")) +
+                           ": " + why);
+  carHome = home;
+  presenceSinceMs = millis();
+  presenceWhy = why;
+}
+
+static void endSession() {
+  if (!ses.active) return;
+  ses.active = false;
+  int8_t endMed = medianOf(ses.ring, ses.rN);
+  String sum = String("session n=") + ses.count + " dur=" + fmtDur(ses.lastMs - ses.startMs) +
+               " first=" + ses.firstRssi + " peak=" + ses.peakRssi + " end~" + endMed +
+               " tail=" + fmtDur(ses.lastMs - ses.peakMs);
+  if (ses.peakRssi < PRESENCE_TRANSIT_DBM) {
+    logEvent("PRESENCE", String("no transit (peak below ") + PRESENCE_TRANSIT_DBM +
+                             "), presence unchanged: " + sum);
+    return;
+  }
+  if (endMed <= PRESENCE_AWAY_DBM) setPresence(false, "transit, then faded out: " + sum);
+  else setPresence(true, "transit, then parked level: " + sum);
+}
 
 // RSSI trajectory label: separates a drive-away (receding) from a
 // parked-awake session (steady) and an approach at a glance in the log
@@ -636,7 +687,9 @@ static String encSummary() {
   return String("n=") + enc.count + " dur=" + fmtDur(enc.lastMs - enc.startMs) +
          " rssi first=" + enc.firstRssi + " min=" + enc.minRssi +
          " max=" + enc.maxRssi + " last=" + enc.lastRssi +
-         " trend=" + trendWord(enc.firstRssi, enc.lastRssi);
+         " trend=" + trendWord(enc.firstRssi, enc.lastRssi) +
+         (enc.count >= 2 * APPROACH_MEDIAN_N
+              ? String(" med=") + enc.firstMed + "->" + enc.lastMed : String(""));
 }
 
 static void endEncounter(const String &why) {
@@ -744,17 +797,33 @@ static void onCarSighting(int8_t rssi, const char *name) {
   lastSightWall = time(nullptr);
   if (name[0]) strlcpy(lastSightName, name, sizeof(lastSightName));
 
+  if (!ses.active) {
+    ses.active = true;
+    ses.startMs = ses.peakMs = now;
+    ses.firstRssi = rssi;
+    ses.peakRssi = -127;
+    ses.count = 0;
+    ses.rIdx = ses.rN = 0;
+  }
+  ses.lastMs = now;
+  if (ses.count < 65535) ses.count++;
+  if (rssi > ses.peakRssi) { ses.peakRssi = rssi; ses.peakMs = now; }
+  ses.ring[ses.rIdx] = rssi;
+  ses.rIdx = (ses.rIdx + 1) % 8;
+  if (ses.rN < 8) ses.rN++;
+
   if (sysState == SysState::Armed) {
     if (!enc.active) {
       enc.active = true;
       enc.startMs = now;
       enc.firstRssi = enc.minRssi = enc.maxRssi = rssi;
       enc.count = 0;
-      enc.relaxedFlagged = enc.wakeFlagged = false;
+      enc.relaxedFlagged = enc.wakeFlagged = enc.homeFlagged = false;
       enc.rIdx = 0;
       memset(enc.recent, 0, sizeof(enc.recent));
       logEvent("ENC", "encounter started: first sighting after away period, rssi " +
-                          String(rssi));
+                          String(rssi) +
+                          (carHome ? " (car is HOME: departure or door blip, cannot fire)" : ""));
     }
     enc.lastMs = now;
     enc.lastRssi = rssi;
@@ -792,13 +861,32 @@ static void onCarSighting(int8_t rssi, const char *name) {
                          "non-fireable: " + encSummary());
     }
 
-    // strict rule: the real verdict (never from a wake-latched encounter)
-    if (!enc.wakeFlagged &&
-        enc.count >= APPROACH_MIN_SIGHTINGS && enc.lastRssi >= RSSI_TRIGGER_DBM &&
-        (enc.maxRssi - enc.firstRssi) >= APPROACH_MIN_RISE_DB &&
-        enc.lastRssi > enc.firstRssi) {
-      fireWouldOpen();
-      return;
+    // strict rule: the real verdict. The rise is measured between the median
+    // of the first and of the last APPROACH_MEDIAN_N sightings (single samples
+    // spread up to 8 dB at rest) over at least APPROACH_MIN_MS. Never from a
+    // wake-latched encounter, and never while the car is HOME: a departure
+    // climbs past the scanner exactly like an arrival
+    if (enc.count <= APPROACH_MEDIAN_N) enc.firstN[enc.count - 1] = rssi;
+    if (enc.count >= 2 * APPROACH_MEDIAN_N) {
+      int8_t lastN[APPROACH_MEDIAN_N];
+      for (int i = 0; i < APPROACH_MEDIAN_N; i++)
+        lastN[i] = enc.recent[(enc.rIdx + 7 - i) % 8].rssi;
+      enc.firstMed = medianOf(enc.firstN, APPROACH_MEDIAN_N);
+      enc.lastMed = medianOf(lastN, APPROACH_MEDIAN_N);
+      bool ramp = !enc.wakeFlagged && enc.count >= APPROACH_MIN_SIGHTINGS &&
+                  now - enc.startMs >= APPROACH_MIN_MS &&
+                  enc.lastRssi >= RSSI_TRIGGER_DBM && enc.lastMed >= RSSI_TRIGGER_DBM &&
+                  (enc.lastMed - enc.firstMed) >= APPROACH_MIN_RISE_DB;
+      if (ramp && carHome) {
+        if (!enc.homeFlagged) {
+          enc.homeFlagged = true;
+          logEvent("VERDICT", "strict rule met but car is HOME (departure or door blip), "
+                              "not firing: " + encSummary());
+        }
+      } else if (ramp) {
+        fireWouldOpen();
+        return;
+      }
     }
   } else {
     // disarmed: aggregate to keep the log compact
@@ -865,6 +953,8 @@ static void onProbeResult(bool ok, const char *name) {
 
 static void machineTick() {
   uint32_t now = millis();
+
+  if (ses.active && now - ses.lastMs > PRESENCE_QUIET_MS) endSession();
 
   if (enc.active) {
     if (now - enc.lastMs > ENCOUNTER_QUIET_MS) {
@@ -1072,6 +1162,9 @@ static void handleRoot() {
   if (pulseActive) h += " &nbsp; <b class=fired>PULSING NOW</b>";
 #endif
   h += "</p>";
+  h += "<p>car <span class='st " + String(carHome ? "dis" : "armed") + "'>" +
+       (carHome ? "HOME" : "AWAY") + "</span> for " + fmtDur(now - presenceSinceMs) +
+       " &nbsp; <small>" + presenceWhy + "</small></p>";
 #if PULSE_ENABLED
 #if WEB_CONTROLS_NEED_TOKEN
   if (strcmp(CONTROL_TOKEN, "change-me-too") == 0)
@@ -1168,6 +1261,10 @@ static void handleRoot() {
   h += String((unsigned)PULSE_MS);
   h += F("> ms <button>open door (manual pulse)</button></form></fieldset>");
 #endif
+  h += F("<form method=POST action=/presence>" TOKEN_FIELD
+         "car is <select name=car><option value=home>HOME</option>"
+         "<option value=away>AWAY</option></select> <button>set presence</button> "
+         "<small>(boot assumes HOME; set AWAY after a reflash while the car is out)</small></form>");
   h += F("<form method=POST action=/mark><input name=note placeholder='e.g. real arrival now' "
          "maxlength=80> <button>Mark in log</button></form>"
          "<p><a href=/log>download log</a> &middot; <a href=/log.old>previous log</a> &middot; "
@@ -1238,6 +1335,21 @@ static bool tokenOk() {
     return false;
   }
   return true;
+}
+
+static void handlePresence() {
+  if (!tokenOk()) {
+    server.send(403, "text/plain", "bad token");
+    return;
+  }
+  String c = server.arg("car");
+  if (c != "home" && c != "away") {
+    server.send(400, "text/plain", "car?");
+    return;
+  }
+  setPresence(c == "home", "set by hand (web, from " + server.client().remoteIP().toString() + ")");
+  server.sendHeader("Location", "/");
+  server.send(303);
 }
 
 static void handleMode() {
@@ -1649,6 +1761,7 @@ void setup() {
 
   server.on("/", HTTP_GET, []() { httpReqCount++; handleRoot(); });
   server.on("/mark", HTTP_POST, []() { httpReqCount++; handleMark(); });
+  server.on("/presence", HTTP_POST, []() { httpReqCount++; handlePresence(); });
 #if PULSE_ENABLED
   server.on("/mode", HTTP_POST, []() { httpReqCount++; handleMode(); });
   server.on("/pulse", HTTP_POST, []() { httpReqCount++; handleManualPulse(); });

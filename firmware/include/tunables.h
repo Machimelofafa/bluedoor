@@ -21,6 +21,12 @@
 #define APPROACH_MIN_SIGHTINGS 3
 // ... with total RSSI rise (max - first) of at least this many dB
 #define APPROACH_MIN_RISE_DB   6
+// ... measured between the median of the first and of the last N sightings,
+// not single samples: consecutive samples at rest spread up to 8 dB, and on
+// 2026-09-06 10:42 three samples inside one second (-92 -84 -88) fired the
+// rule on a car that had not moved. The ramp must also last at least this long
+#define APPROACH_MEDIAN_N      4
+#define APPROACH_MIN_MS        (2u * 1000u)
 // Relaxed rule (logged for comparison, never the primary verdict):
 // >= 2 sightings at/above RSSI_TRIGGER_DBM within this window
 #define RELAXED_MIN_SIGHTINGS  2
@@ -48,6 +54,25 @@
 // or above WAKE_STRONG_DBM while disarmed (the car came in and parked) cancels
 // the short re-arm, so the parked-car door-open blip keeps its 10 min cover.
 #define REARM_NOVERDICT_MS     (2u * 60u * 1000u)
+
+// ---- car presence (home / away) ----
+// A parked car is silent, so "no beacon for 10 min" is true both away and in
+// the garage. On 2026-09-06 three departures (beacon powering on at the parked
+// level, car then driving out past the scanner) fired the strict rule, and
+// both real arrivals were lost to the lockouts those verdicts caused. Presence
+// is therefore tracked from how each beacon session ends. A session is one run
+// of sightings separated by PRESENCE_QUIET_MS of silence. A session with a
+// transit (peak >= PRESENCE_TRANSIT_DBM: the car passed the scanner, measured
+// -67..-73 in both directions; parked reads -83..-96) sets presence from its
+// ending level: the median of the last sightings at or below PRESENCE_AWAY_DBM
+// means the car drove out of range (AWAY), anything stronger means it parked
+// inside (HOME). Sessions without a transit (door-open blip, a wait at the top
+// of the ramp) change nothing. While HOME no encounter can fire. Boot assumes
+// HOME, so the failure after a reflash is a missed arrival, never a stray
+// press; the status page can set presence by hand.
+#define PRESENCE_QUIET_MS      (30u * 1000u)
+#define PRESENCE_TRANSIT_DBM   (-78)
+#define PRESENCE_AWAY_DBM      (-93)
 
 // ---- classic BT scanning ----
 // Inquiry length in 1.28 s units (4 = 5.12 s per cycle, restarted continuously)
