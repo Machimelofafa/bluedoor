@@ -223,7 +223,7 @@ and is documented there. The ones that matter:
 | `RSSI_TRIGGER_DBM` | −90 (beacon) | the approach must cross this level |
 | `APPROACH_MIN_SIGHTINGS` / `APPROACH_MIN_RISE_DB` | 3 / 6 dB | the "rising ramp" definition |
 | `APPROACH_MEDIAN_N` / `APPROACH_MIN_MS` | 4 / 2 s | the rise is between medians of the first and last N sightings, over at least this long |
-| `PRESENCE_TRANSIT_DBM` / `PRESENCE_QUIET_MS` | −75 / 60 s | a session peaking this strong is the car passing the scanner; longer heard after the pass than before means it parked, else it left |
+| `PRESENCE_TRANSIT_DBM` / `PRESENCE_QUIET_MS` | −75 / 60 s | classify sessions without an accepted arrival by time around a strong peak; accepted arrivals immediately set HOME, and a separate departure session must restore AWAY |
 | `WAKE_STRONG_DBM` / `WAKE_FLAT_DB` | −85 / 4 dB | the "parked car woken in place" signature, refused |
 | `PULSE_MS` | 250 ms | button press length |
 | `BLE_SURVEY` | 0 | log every advertiser heard (set to 1 for a census while commissioning; it fills the log in an hour) |

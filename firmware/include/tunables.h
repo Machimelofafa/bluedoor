@@ -72,6 +72,10 @@
 // AWAY. Received level cannot do this (the parked and ramp-top bands overlap;
 // a level rule misread two of three transits on 2026-09-06). Sessions without
 // a transit (door-open blip, a wait at the top of the ramp) change nothing.
+// An accepted strict arrival sets HOME immediately, even if its session never
+// reaches PRESENCE_TRANSIT_DBM. That same session cannot change presence again;
+// a separate departure session is needed to restore AWAY. This applies in all
+// run modes and is detection evidence, not confirmation that the door opened.
 // While HOME no encounter can fire. Boot assumes HOME, so the failure after a
 // reflash is a missed arrival, never a stray press; the status page can set
 // presence by hand.

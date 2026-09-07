@@ -598,14 +598,15 @@ static struct {
   int8_t firstRssi = 0, lastRssi = 0, minRssi = 0, maxRssi = 0;
 } agg;
 
-// car presence, inferred from how each beacon session ends (tunables.h,
-// "car presence"). A session spans every sighting, armed or not, until
-// PRESENCE_QUIET_MS of silence
+// Accepted arrivals set HOME immediately. Other sessions infer presence from
+// their shape (tunables.h, "car presence"). A session spans every sighting,
+// armed or not, until PRESENCE_QUIET_MS of silence.
 static bool carHome = true;                 // boot assumes home: safe side
 static uint32_t presenceSinceMs = 0;
 static String presenceWhy = "assumed at boot";
 static struct {
   bool active = false;
+  bool arrivalAccepted = false;
   uint32_t startMs = 0, lastMs = 0, peakMs = 0;
   int8_t firstRssi = 0, peakRssi = -127;
   uint16_t count = 0;
@@ -639,6 +640,13 @@ static void endSession() {
   String sum = String("session n=") + ses.count + " dur=" + fmtDur(ses.lastMs - ses.startMs) +
                " first=" + ses.firstRssi + " peak=" + ses.peakRssi + " end~" + endMed +
                " before-peak=" + fmtDur(head) + " after-peak=" + fmtDur(tail);
+  // The approach verdict already consumed this arrival. Its later peak or
+  // tail must not turn the same session into a departure and permit a repeat.
+  // A subsequent, separate session can still establish that the car left.
+  if (ses.arrivalAccepted) {
+    logEvent("PRESENCE", "accepted arrival session, presence unchanged: " + sum);
+    return;
+  }
   if (ses.peakRssi < PRESENCE_TRANSIT_DBM) {
     logEvent("PRESENCE", String("no transit (peak below ") + PRESENCE_TRANSIT_DBM +
                              "), presence unchanged: " + sum);
@@ -784,6 +792,10 @@ static void fireWouldOpen() {
   prefs.putUInt("fired", firedCount);
   lastVerdict = tsNow() + "  WOULD-OPEN (strict): " + encSummary();
   logEvent("VERDICT", "*** WOULD OPEN *** (strict rule) " + encSummary());
+  // Presence follows detection in every run mode; this is not confirmation
+  // that the door moved. Do not require a second, stronger transit peak.
+  ses.arrivalAccepted = true;
+  setPresence(true, "strict arrival accepted; awaiting a separate departure session");
 #if PULSE_ENABLED
   actuateOnVerdict();
 #endif
@@ -803,6 +815,7 @@ static void onCarSighting(int8_t rssi, const char *name) {
 
   if (!ses.active) {
     ses.active = true;
+    ses.arrivalAccepted = false;
     ses.startMs = ses.peakMs = now;
     ses.firstRssi = rssi;
     ses.peakRssi = -127;
@@ -1243,7 +1256,6 @@ static void handleRoot() {
        "s</td></tr>";
   h += F("</table>");
 
-#if PULSE_ENABLED
 #if WEB_CONTROLS_NEED_TOKEN
 #define TOKEN_FIELD "token <input type=password name=token size=10> "
 #define CONTROLS_LEGEND "controls (token required)"
@@ -1251,6 +1263,7 @@ static void handleRoot() {
 #define TOKEN_FIELD ""
 #define CONTROLS_LEGEND "controls (OPEN — bench build)"
 #endif
+#if PULSE_ENABLED
   h += F("<fieldset><legend>" CONTROLS_LEGEND "</legend>"
          "<form method=POST action=/mode>" TOKEN_FIELD
          "<select name=mode>");
@@ -1324,7 +1337,6 @@ static void handleTail() {
   server.sendContent("");
 }
 
-#if PULSE_ENABLED
 static bool tokenOk() {
 #if !WEB_CONTROLS_NEED_TOKEN
   return true;  // bench mode, see tunables.h
@@ -1356,6 +1368,7 @@ static void handlePresence() {
   server.send(303);
 }
 
+#if PULSE_ENABLED
 static void handleMode() {
   if (!tokenOk()) {
     server.send(403, "text/plain", "bad token");

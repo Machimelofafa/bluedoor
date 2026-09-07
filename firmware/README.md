@@ -90,10 +90,17 @@ Controls, each requiring `CONTROL_TOKEN`:
   the car passing the scanner) the time around that peak decides: an arrival
   is heard for seconds, passes, then sits parked with the engine on, so it is
   longer after the peak than before (HOME); a departure idles inside, passes,
-  and is out of range in seconds (AWAY). Received level cannot do this, the
-  parked and ramp-top bands overlap. Sessions without a transit change
-  nothing. **While HOME nothing fires.** Boot assumes HOME, so a reflash
+  and is out of range in seconds (AWAY). An accepted strict arrival sets HOME
+  immediately, even if its later peak never reaches the transit threshold.
+  That arrival session cannot subsequently classify itself as a departure;
+  a separate session must establish AWAY. This works in every run mode and
+  does not confirm door movement. Received level cannot do this, the
+  parked and ramp-top bands overlap. Sessions without a transit or an accepted
+  arrival change nothing. **While HOME nothing fires.** Boot assumes HOME, so a reflash
   costs at most one missed arrival; the status page can set presence by hand.
+  If an arrival turns straight back without a session-ending silence, the
+  scanner conservatively stays HOME until a later departure session. Weak
+  departures that never reach the transit threshold remain unconfirmed.
 - **Strict arrival** (the only thing that fires): car AWAY, absence, then an
   encounter of at least `APPROACH_MIN_SIGHTINGS` sightings and
   `APPROACH_MIN_MS`, whose median of the last `APPROACH_MEDIAN_N` sightings is
@@ -154,6 +161,20 @@ Controls, each requiring `CONTROL_TOKEN`:
 Serial mirrors everything at 115200. WiFi loss never stops detection.
 
 ## Design notes
+
+### Host regression checks
+
+Run `python3 tests/run_presence_tests.py` from `firmware/` (Python 3 and a
+C++17-capable `g++` required). The runner compiles the actual state-machine
+section of `src/main.cpp` with stubbed clock, logging, NVS and GPIO, for both
+logger and production configurations. It checks the recorded arrival's first
+eight RSSI samples, a below-threshold arrival tail, same-session reclassification,
+parked wakeups, a later departure/arrival, and the DISABLED/DRY-RUN/LIVE gates.
+Only the first eight arrival RSSIs are individual recorded packets; later
+session shapes are representative or adversarial test inputs. These checks do
+not validate radio reception, remote wiring, or physical door movement.
+
+### Runtime
 
 - **BLE passive scanning, continuously**, restarted every
   `BLE_SCAN_RESTART_MS` as a liveness watchdog. The beacon's name rides in the
