@@ -580,6 +580,7 @@ struct Sight { uint32_t ms; int8_t rssi; };
 static struct {
   bool active = false;
   uint32_t startMs = 0, lastMs = 0;
+  uint32_t nearSinceMs = 0, nearLastMs = 0;
   int8_t firstRssi = 0, lastRssi = 0, minRssi = 0, maxRssi = 0;
   uint16_t count = 0;
   bool relaxedFlagged = false, wakeFlagged = false, homeFlagged = false;
@@ -598,12 +599,18 @@ static struct {
   int8_t firstRssi = 0, lastRssi = 0, minRssi = 0, maxRssi = 0;
 } agg;
 
-// Accepted arrivals set HOME immediately. Other sessions infer presence from
-// their shape (tunables.h, "car presence"). A session spans every sighting,
-// armed or not, until PRESENCE_QUIET_MS of silence.
-static bool carHome = true;                 // boot assumes home: safe side
+// Location inference is separate from the duplicate-command latch. A pulse
+// proves neither garage occupancy nor physical door movement. Boot is UNKNOWN.
+static bool carHome = true;
+static bool presenceKnown = false;
+static bool arrivalLatched = false;
+static bool departureConfirmed = false;
 static uint32_t presenceSinceMs = 0;
-static String presenceWhy = "assumed at boot";
+static String presenceWhy = "unknown after boot; waiting for observed movement";
+
+static const char *presenceName() {
+  return !presenceKnown ? "UNKNOWN" : (carHome ? "GARAGE (inferred)" : "OUTSIDE GARAGE (inferred)");
+}
 static struct {
   bool active = false;
   bool arrivalAccepted = false;
@@ -623,13 +630,60 @@ static int8_t medianOf(const int8_t *v, int n) {
   return n ? t[(n - 1) / 2] : 0;
 }
 
+// One-second histograms preserve packet density and spread in every state.
+// Logging every packet exhausted both retained files during a single morning.
+static struct {
+  bool active = false;
+  uint32_t startMs = 0, lastMs = 0;
+  uint16_t count = 0, bins[128] = {};
+  int8_t first = 0, last = 0, low = 0, high = 0;
+} signalBucket;
+
+static void flushSignalBucket() {
+  if (!signalBucket.active) return;
+  unsigned cumulative = 0;
+  int med = -127;
+  for (int i = 0; i < 128; ++i) {
+    cumulative += signalBucket.bins[i];
+    if (cumulative > (signalBucket.count - 1u) / 2u) { med = i - 127; break; }
+  }
+  logEvent("SIGNAL", String("ms=") + signalBucket.startMs +
+           " span=" + (signalBucket.lastMs - signalBucket.startMs) +
+           " n=" + signalBucket.count + " first=" + signalBucket.first +
+           " last=" + signalBucket.last + " min=" + signalBucket.low +
+           " max=" + signalBucket.high + " med=" + med);
+  signalBucket = {};
+}
+
+static void recordSignal(uint32_t now, int8_t rssi) {
+  if (signalBucket.active && now - signalBucket.startMs >= SIGNAL_BUCKET_MS)
+    flushSignalBucket();
+  if (!signalBucket.active) {
+    signalBucket.active = true;
+    signalBucket.startMs = now;
+    signalBucket.first = signalBucket.low = signalBucket.high = rssi;
+  }
+  signalBucket.lastMs = now;
+  signalBucket.last = rssi;
+  if (rssi < signalBucket.low) signalBucket.low = rssi;
+  if (rssi > signalBucket.high) signalBucket.high = rssi;
+  if (signalBucket.count < 65535) {
+    ++signalBucket.count;
+    int index = (int)rssi + 127;
+    if (index < 0) index = 0;
+    if (index > 127) index = 127;
+    ++signalBucket.bins[index];
+  }
+}
+
 static void setPresence(bool home, const String &why) {
-  logEvent("PRESENCE", String("car ") + (home ? "HOME" : "AWAY") +
-                           (home == carHome ? " (unchanged)" : (home ? " (was AWAY)" : " (was HOME)")) +
-                           ": " + why);
   carHome = home;
+  presenceKnown = true;
+  departureConfirmed = false;
+  if (!home) arrivalLatched = false;
   presenceSinceMs = millis();
   presenceWhy = why;
+  logEvent("PRESENCE", String(presenceName()) + ": " + why);
 }
 
 static void endSession() {
@@ -637,26 +691,35 @@ static void endSession() {
   ses.active = false;
   int8_t endMed = medianOf(ses.ring, ses.rN);
   uint32_t head = ses.peakMs - ses.startMs, tail = ses.lastMs - ses.peakMs;
-  String sum = String("session n=") + ses.count + " dur=" + fmtDur(ses.lastMs - ses.startMs) +
+  String sum = String("n=") + ses.count + " dur=" + fmtDur(ses.lastMs - ses.startMs) +
                " first=" + ses.firstRssi + " peak=" + ses.peakRssi + " end~" + endMed +
-               " before-peak=" + fmtDur(head) + " after-peak=" + fmtDur(tail);
-  // The approach verdict already consumed this arrival. Its later peak or
-  // tail must not turn the same session into a departure and permit a repeat.
-  // A subsequent, separate session can still establish that the car left.
+               " before=" + fmtDur(head) + " after=" + fmtDur(tail);
+  // Separate the full evidence record from the short decision line so neither
+  // is truncated by the flash log or the status-page ring buffer.
+  logEvent("SESSION", sum);
   if (ses.arrivalAccepted) {
-    logEvent("PRESENCE", "accepted arrival session, presence unchanged: " + sum);
+    // An accepted approach may infer garage presence only after a parked tail.
+    // Ambiguous sessions retain their duplicate latch, never reclassify AWAY.
+    if (tail >= PRESENCE_PARKED_MIN_MS && tail > head && endMed < RSSI_TRIGGER_DBM)
+      setPresence(true, "accepted approach followed by parked tail; door movement unknown");
+    else
+      logEvent("PRESENCE", "accepted approach unconfirmed; location UNKNOWN, duplicate latch retained");
     return;
   }
   if (ses.peakRssi < PRESENCE_TRANSIT_DBM) {
-    logEvent("PRESENCE", String("no transit (peak below ") + PRESENCE_TRANSIT_DBM +
-                             "), presence unchanged: " + sum);
+    logEvent("PRESENCE", String("no transit, location unchanged: ") + presenceName());
     return;
   }
-  // shape, not level: an arrival is brief before the pass and long after it
-  // (parks, engine on, USB grace); a departure idles before and is gone in
-  // seconds after
-  if (tail > head) setPresence(true, "transit, longer after the pass than before (parked): " + sum);
-  else setPresence(false, "transit, longer before the pass than after (drove off): " + sum);
+  if (tail > head && tail >= PRESENCE_PARKED_MIN_MS) {
+    setPresence(true, "transit followed by parked tail");
+  } else if (head >= PRESENCE_DEPARTURE_HEAD_MS &&
+             head >= tail + PRESENCE_DIRECTION_MARGIN_MS &&
+             tail <= PRESENCE_DEPARTURE_TAIL_MS && endMed <= PRESENCE_FADED_DBM) {
+    setPresence(false, "separate departure: idle, transit, fade and silence");
+    departureConfirmed = true;
+  } else {
+    logEvent("PRESENCE", String("ambiguous transit, location unchanged: ") + presenceName());
+  }
 }
 
 // RSSI trajectory label: separates a drive-away (receding) from a
@@ -792,14 +855,16 @@ static void fireWouldOpen() {
   prefs.putUInt("fired", firedCount);
   lastVerdict = tsNow() + "  WOULD-OPEN (strict): " + encSummary();
   logEvent("VERDICT", "*** WOULD OPEN *** (strict rule) " + encSummary());
-  // Presence follows detection in every run mode; this is not confirmation
-  // that the door moved. Do not require a second, stronger transit peak.
   ses.arrivalAccepted = true;
-  setPresence(true, "strict arrival accepted; awaiting a separate departure session");
+  arrivalLatched = true;
+  presenceKnown = false;
+  presenceSinceMs = millis();
+  presenceWhy = "approach accepted; waiting for movement evidence";
+  logEvent("PRESENCE", "location UNKNOWN; approach accepted, duplicate latch set");
 #if PULSE_ENABLED
   actuateOnVerdict();
 #endif
-  logEvent("VERDICT", "entering lockout: no further verdicts until a full away period");
+  logEvent("VERDICT", "entering lockout: duplicate latch needs a separate confirmed departure");
   enc.active = false;
   setState(SysState::DisarmedLockout, "would-open fired");
 }
@@ -807,6 +872,7 @@ static void fireWouldOpen() {
 static void onCarSighting(int8_t rssi, const char *name) {
   uint32_t now = millis();
   totalSightings++;
+  recordSignal(now, rssi);
   lastEvidenceMs = now;
   lastSightMs = now;
   lastSightRssi = rssi;
@@ -815,6 +881,7 @@ static void onCarSighting(int8_t rssi, const char *name) {
 
   if (!ses.active) {
     ses.active = true;
+    departureConfirmed = false;
     ses.arrivalAccepted = false;
     ses.startMs = ses.peakMs = now;
     ses.firstRssi = rssi;
@@ -833,6 +900,7 @@ static void onCarSighting(int8_t rssi, const char *name) {
     if (!enc.active) {
       enc.active = true;
       enc.startMs = now;
+      enc.nearSinceMs = enc.nearLastMs = 0;
       enc.firstRssi = enc.minRssi = enc.maxRssi = rssi;
       enc.count = 0;
       enc.relaxedFlagged = enc.wakeFlagged = enc.homeFlagged = false;
@@ -840,7 +908,8 @@ static void onCarSighting(int8_t rssi, const char *name) {
       memset(enc.recent, 0, sizeof(enc.recent));
       logEvent("ENC", "encounter started: first sighting after away period, rssi " +
                           String(rssi) +
-                          (carHome ? " (car is HOME: departure or door blip, cannot fire)" : ""));
+                          ", location=" + presenceName() +
+                          (arrivalLatched ? ", duplicate latch set" : ""));
     }
     enc.lastMs = now;
     enc.lastRssi = rssi;
@@ -849,7 +918,6 @@ static void onCarSighting(int8_t rssi, const char *name) {
     if (enc.count < 65535) enc.count++;
     enc.recent[enc.rIdx] = {now, rssi};
     enc.rIdx = (enc.rIdx + 1) % 8;
-    logEvent("SIGHT", "armed sighting #" + String(enc.count) + " rssi " + String(rssi));
 
     // relaxed rule (comparison data only): N recent sightings above threshold
     if (!enc.relaxedFlagged) {
@@ -881,8 +949,8 @@ static void onCarSighting(int8_t rssi, const char *name) {
     // strict rule: the real verdict. The rise is measured between the median
     // of the first and of the last APPROACH_MEDIAN_N sightings (single samples
     // spread up to 8 dB at rest) over at least APPROACH_MIN_MS. Never from a
-    // wake-latched encounter, and never while the car is HOME: a departure
-    // climbs past the scanner exactly like an arrival
+    // wake-latched encounter. Strong reception must span time, not merely a
+    // burst of packets. Location and duplicate suppression gate it separately.
     if (enc.count <= APPROACH_MEDIAN_N) enc.firstN[enc.count - 1] = rssi;
     if (enc.count >= 2 * APPROACH_MEDIAN_N) {
       int8_t lastN[APPROACH_MEDIAN_N];
@@ -890,15 +958,24 @@ static void onCarSighting(int8_t rssi, const char *name) {
         lastN[i] = enc.recent[(enc.rIdx + 7 - i) % 8].rssi;
       enc.firstMed = medianOf(enc.firstN, APPROACH_MEDIAN_N);
       enc.lastMed = medianOf(lastN, APPROACH_MEDIAN_N);
+      bool near = enc.lastRssi >= RSSI_TRIGGER_DBM && enc.lastMed >= RSSI_TRIGGER_DBM;
+      if (!near) {
+        enc.nearSinceMs = enc.nearLastMs = 0;
+      } else {
+        if (!enc.nearSinceMs || now - enc.nearLastMs > APPROACH_NEAR_MAX_GAP_MS)
+          enc.nearSinceMs = now;
+        enc.nearLastMs = now;
+      }
       bool ramp = !enc.wakeFlagged && enc.count >= APPROACH_MIN_SIGHTINGS &&
                   now - enc.startMs >= APPROACH_MIN_MS &&
-                  enc.lastRssi >= RSSI_TRIGGER_DBM && enc.lastMed >= RSSI_TRIGGER_DBM &&
+                  near && now - enc.nearSinceMs >= APPROACH_NEAR_MIN_MS &&
                   (enc.lastMed - enc.firstMed) >= APPROACH_MIN_RISE_DB;
-      if (ramp && carHome) {
+      if (ramp && (!presenceKnown || carHome || arrivalLatched)) {
         if (!enc.homeFlagged) {
           enc.homeFlagged = true;
-          logEvent("VERDICT", "strict rule met but car is HOME (departure or door blip), "
-                              "not firing: " + encSummary());
+          logEvent("VERDICT", String("approach blocked: location=") + presenceName() +
+                              (arrivalLatched ? ", duplicate latch set" : ""));
+          logEvent("APPROACH", encSummary());
         }
       } else if (ramp) {
         fireWouldOpen();
@@ -970,6 +1047,8 @@ static void onProbeResult(bool ok, const char *name) {
 
 static void machineTick() {
   uint32_t now = millis();
+  if (signalBucket.active && now - signalBucket.startMs >= SIGNAL_BUCKET_MS)
+    flushSignalBucket();
 
   if (ses.active && now - ses.lastMs > PRESENCE_QUIET_MS) endSession();
 
@@ -990,13 +1069,15 @@ static void machineTick() {
   if (agg.active && now - agg.lastMs > SIGHT_AGG_QUIET_MS) flushAgg("went quiet");
 
   // a no-verdict encounter (car lingered, then left) re-arms on the short
-  // timer; boot, lockout and a car that came in and parked need the full absence
-  bool shortNow = sysState == SysState::DisarmedSeen && shortRearm;
+  // timer, also allowed after a separate confirmed departure. Other boot/lockout
+  // cases retain the full absence; location and the duplicate latch still gate firing.
+  bool shortNow = departureConfirmed || (sysState == SysState::DisarmedSeen && shortRearm);
   uint32_t need = shortNow ? REARM_NOVERDICT_MS : AWAY_MIN_MS;
   if (sysState != SysState::Armed && now - lastEvidenceMs >= need) {
     flushAgg("state change");
     setState(SysState::Armed, "no car evidence for " + fmtDur(now - lastEvidenceMs) +
-                                  (shortNow ? " (short re-arm after no-verdict encounter)" : ""));
+                                  (departureConfirmed ? " (confirmed departure)" :
+                                   (shortNow ? " (no-verdict encounter)" : "")));
   }
 }
 
@@ -1179,9 +1260,10 @@ static void handleRoot() {
   if (pulseActive) h += " &nbsp; <b class=fired>PULSING NOW</b>";
 #endif
   h += "</p>";
-  h += "<p>car <span class='st " + String(carHome ? "dis" : "armed") + "'>" +
-       (carHome ? "HOME" : "AWAY") + "</span> for " + fmtDur(now - presenceSinceMs) +
+  h += "<p>car <span class='st " + String(presenceKnown && !carHome ? "armed" : "dis") + "'>" +
+       presenceName() + "</span> for " + fmtDur(now - presenceSinceMs) +
        " &nbsp; <small>" + presenceWhy + "</small></p>";
+  h += String("<p>Duplicate opening block: ") + (arrivalLatched ? "SET" : "clear") + "</p>";
 #if PULSE_ENABLED
 #if WEB_CONTROLS_NEED_TOKEN
   if (strcmp(CONTROL_TOKEN, "change-me-too") == 0)
@@ -1252,6 +1334,7 @@ static void handleRoot() {
   h += "<tr><td>tunables</td><td>away=" + String(AWAY_MIN_MS / 60000) +
        "min trigger=" + String(RSSI_TRIGGER_DBM) + "dBm ramp&ge;" +
        String(APPROACH_MIN_RISE_DB) + "dB sightings&ge;" + String(APPROACH_MIN_SIGHTINGS) +
+       " near=" + String(APPROACH_NEAR_MIN_MS) + "ms" +
        " inq=" + String(INQ_LEN_UNITS * 128 / 100) + "." + String(INQ_LEN_UNITS * 128 % 100) +
        "s</td></tr>";
   h += F("</table>");
@@ -1279,9 +1362,9 @@ static void handleRoot() {
   h += F("> ms <button>open door (manual pulse)</button></form></fieldset>");
 #endif
   h += F("<form method=POST action=/presence>" TOKEN_FIELD
-         "car is <select name=car><option value=home>HOME</option>"
-         "<option value=away>AWAY</option></select> <button>set presence</button> "
-         "<small>(boot assumes HOME; set AWAY after a reflash while the car is out)</small></form>");
+         "car is <select name=car><option value=home>IN GARAGE</option>"
+         "<option value=away>OUTSIDE GARAGE</option></select> <button>set presence</button> "
+         "<small>(diagnostic override; boot location is UNKNOWN)</small></form>");
   h += F("<form method=POST action=/mark><input name=note placeholder='e.g. real arrival now' "
          "maxlength=80> <button>Mark in log</button></form>"
          "<p><a href=/log>download log</a> &middot; <a href=/log.old>previous log</a> &middot; "
@@ -1413,6 +1496,7 @@ static void handleManualPulse() {
     doPulse("manual/web", ms);
     // door state is unknown after any pulse — same lockout as an auto fire
     endEncounter("manual pulse");
+    departureConfirmed = false;
     setState(SysState::DisarmedLockout, "manual pulse");
   }
   server.sendHeader("Location", "/");
@@ -1724,6 +1808,9 @@ void setup() {
   logEvent("MODE", String("run mode: ") + modeName(runMode) +
                        " (persisted; first-ever boot defaults to DRY-RUN)");
 #endif
+  logEvent("CONFIG", String("approach gate=") + RSSI_TRIGGER_DBM + "dBm near=" +
+                      APPROACH_NEAR_MIN_MS + "ms maxgap=" + APPROACH_NEAR_MAX_GAP_MS +
+                      "ms; location UNKNOWN at boot; separate command latch");
   logEvent("STATE", String("boot-disarmed: first sighting after boot is never an arrival; "
                            "arming needs ") + fmtDur(AWAY_MIN_MS) + " with no car evidence");
 

@@ -74,17 +74,20 @@ extension). The firmware targets the Arduino core for ESP32.
          [spare remote, own battery]  ──▶  a normal rolling-code press  ──▶  door
 ```
 
-The scanner only fires on an **arrival**: the beacon must have been absent
-for at least 10 minutes, then heard several times with a rising signal that
-crosses a threshold. A parked car is silent (its USB is off), so "absent"
-covers both "away" and "in the garage", and a departure climbs past the
-scanner exactly like an arrival. The scanner therefore also tracks whether the
-car is **home or away** from the shape of each beacon session: heard briefly,
-then a pass by the scanner, then a long parked tail means it came in; a long
-idle, a pass, then gone in seconds means it left. While the car is home nothing fires, so
-starting the car in the garage or opening its door never presses the button.
-After any press the door state is unknown, so nothing fires again until a
-full absence and a fresh arrival.
+The scanner opens for a qualifying approach down the ramp when the car is
+inferred to be **outside the garage**. It requires a rising signal reaching
+−80 dBm across recent samples for at least 500 ms. Weak reception from upper
+parking does not count as a garage approach. This threshold needs validation
+on the actual property; it is not a distance measurement.
+
+Location inference and duplicate-opening suppression are separate. A command
+sets a duplicate block; only the later movement pattern can infer garage
+occupancy. A separate strong departure followed by fading and silence clears
+the block and permits re-arming after two minutes of quiet. Other lockouts
+retain ten minutes, and silence alone never proves that a parked car left.
+Boot location is UNKNOWN, so the first arrival after reboot may be missed
+until movement establishes location. Ambiguous or same-session short trips
+remain conservatively blocked.
 
 Departures are not automated. You press the remote in the car as before.
 
@@ -219,11 +222,12 @@ and is documented there. The ones that matter:
 | Tunable | Default | What it does |
 |---|---|---|
 | `AWAY_MIN_MS` | 10 min | absence required before the system arms |
-| `REARM_NOVERDICT_MS` | 2 min | shorter absence after an encounter that ended without a verdict (the car lingered in range and left) |
-| `RSSI_TRIGGER_DBM` | −90 (beacon) | the approach must cross this level |
-| `APPROACH_MIN_SIGHTINGS` / `APPROACH_MIN_RISE_DB` | 3 / 6 dB | the "rising ramp" definition |
+| `REARM_NOVERDICT_MS` | 2 min | quiet re-arm after no verdict or a separately confirmed departure; does not clear a duplicate latch by itself |
+| `RSSI_TRIGGER_DBM` | −80 (beacon) | both latest sample and recent median must reach this experimental approach gate |
+| `APPROACH_MIN_SIGHTINGS` / `APPROACH_MIN_RISE_DB` | 8 / 6 dB | the "rising ramp" definition |
 | `APPROACH_MEDIAN_N` / `APPROACH_MIN_MS` | 4 / 2 s | the rise is between medians of the first and last N sightings, over at least this long |
-| `PRESENCE_TRANSIT_DBM` / `PRESENCE_QUIET_MS` | −75 / 60 s | classify sessions without an accepted arrival by time around a strong peak; accepted arrivals immediately set HOME, and a separate departure session must restore AWAY |
+| `APPROACH_NEAR_MIN_MS` / `APPROACH_NEAR_MAX_GAP_MS` | 500 / 1500 ms | require near evidence spanning time; weak reception or a long sample gap resets it |
+| `PRESENCE_TRANSIT_DBM` / `PRESENCE_QUIET_MS` | −75 / 60 s | strong movement threshold and session-ending silence; see firmware README for direction and parked-tail guards |
 | `WAKE_STRONG_DBM` / `WAKE_FLAT_DB` | −85 / 4 dB | the "parked car woken in place" signature, refused |
 | `PULSE_MS` | 250 ms | button press length |
 | `BLE_SURVEY` | 0 | log every advertiser heard (set to 1 for a census while commissioning; it fills the log in an hour) |

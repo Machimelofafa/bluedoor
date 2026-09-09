@@ -71,8 +71,8 @@ Controls, each requiring `CONTROL_TOKEN`:
   "opened the parked car's door") to compare against verdicts.
 - **Mode**: `DISABLED` / `DRY-RUN` / `LIVE`, persisted. A reboot never
   escalates the mode. First boot is DRY-RUN.
-- **Presence**: set the car HOME or AWAY by hand, mainly after a reflash while
-  the car is out (boot assumes HOME).
+- **Presence**: diagnostic override to IN GARAGE or OUTSIDE GARAGE. Boot
+  location is UNKNOWN; normal operation resolves it from observed movement.
 - **Manual pulse** (v1 builds): a single press for commissioning, refused in
   DISABLED. The optional hold field (50 to 20000 ms) is a bench aid: a 3 s hold
   lets you meter the pin, the optocoupler LED and the remote pads stage by
@@ -81,32 +81,34 @@ Controls, each requiring `CONTROL_TOKEN`:
 ## How the scanner decides
 
 - **Disarmed at boot** until no sighting for `AWAY_MIN_MS` (10 min).
-- **Car presence, HOME or AWAY**, inferred from the shape of each beacon
-  session. A parked car is silent, so absence alone cannot tell "away" from
-  "in the garage", and a departure (beacon powering on at the parked level,
-  then the car driving out past the scanner) climbs exactly like an arrival.
-  A session is one run of sightings separated by `PRESENCE_QUIET_MS` of
-  silence. If it contains a transit (peak at or above `PRESENCE_TRANSIT_DBM`,
-  the car passing the scanner) the time around that peak decides: an arrival
-  is heard for seconds, passes, then sits parked with the engine on, so it is
-  longer after the peak than before (HOME); a departure idles inside, passes,
-  and is out of range in seconds (AWAY). An accepted strict arrival sets HOME
-  immediately, even if its later peak never reaches the transit threshold.
-  That arrival session cannot subsequently classify itself as a departure;
-  a separate session must establish AWAY. This works in every run mode and
-  does not confirm door movement. Received level cannot do this, the
-  parked and ramp-top bands overlap. Sessions without a transit or an accepted
-  arrival change nothing. **While HOME nothing fires.** Boot assumes HOME, so a reflash
-  costs at most one missed arrival; the status page can set presence by hand.
-  If an arrival turns straight back without a session-ending silence, the
-  scanner conservatively stays HOME until a later departure session. Weak
-  departures that never reach the transit threshold remain unconfirmed.
-- **Strict arrival** (the only thing that fires): car AWAY, absence, then an
-  encounter of at least `APPROACH_MIN_SIGHTINGS` sightings and
-  `APPROACH_MIN_MS`, whose median of the last `APPROACH_MEDIAN_N` sightings is
-  at least `APPROACH_MIN_RISE_DB` above the median of its first
-  `APPROACH_MEDIAN_N` and crosses `RSSI_TRIGGER_DBM`. Medians, because single
-  samples spread up to 8 dB at rest.
+- **Inferred location**: UNKNOWN, GARAGE, or OUTSIDE GARAGE. OUTSIDE GARAGE
+  includes upper-property parking; it does not assert that the car left the
+  property. Weak sessions leave location unchanged. Boot is UNKNOWN and blocks
+  automatic openings until a movement establishes location; silence does not
+  prove the car left. This can miss the first arrival after reboot.
+- **Approach gate**: at least eight packets over two seconds, a rise of at
+  least 6 dB between the first and last four-packet medians, and both the
+  newest sample and recent median at or above −80 dBm. Near reception must
+  span 500 ms, resetting on a weak sample/median or a gap over 1500 ms. The
+  gate is experimental: upper-parking reception in the captured false opening
+  peaked at −88, while a genuine garage approach reached −68. Signal strength
+  does not establish direction by itself.
+- **Duplicate-command latch**: accepting an approach blocks repeats immediately
+  in every run mode, but sets location UNKNOWN rather than claiming garage
+  occupancy. After 60 seconds of silence ends the session, a post-peak tail
+  of at least 15 seconds, longer than the head and ending below the approach
+  threshold, infers GARAGE. An ambiguous accepted session keeps UNKNOWN and
+  its latch. The accepted session can never classify itself as a departure.
+- **Separate departure**: an unaccepted session needs a peak of at least −75,
+  at least 15 seconds before the peak, a head at least 10 seconds longer than
+  the tail, a tail at most 15 seconds, and an ending median at or below −85.
+  After 60 seconds of silence it can infer OUTSIDE GARAGE and clear the latch.
+  A sufficiently long post-peak tail instead infers GARAGE; other strong
+  traces are ambiguous. These are route heuristics, not measured door state.
+- **Opening eligibility**: only OUTSIDE GARAGE with a clear duplicate latch
+  can open. Weak activity in upper parking neither issues a command nor
+  consumes a subsequent approach down the ramp. GARAGE and UNKNOWN block
+  even a strong approach signature, protecting against departures and wakes.
 - **Relaxed rule**, logged only, never fires: two sightings above the trigger
   inside a minute, no ramp required. It exists so you can compare the two
   rules against your Mark lines and decide with data.
@@ -114,7 +116,11 @@ Controls, each requiring `CONTROL_TOKEN`:
   `WAKE_STRONG_DBM` and stays within `WAKE_FLAT_DB` is the parked-car
   signature (someone opened a door and briefly powered the beacon). The whole
   encounter is latched non-fireable.
-- **Lockout** after any pulse until a full absence and a new arrival.
+- **Lockout**: the normal quiet timer remains ten minutes. A separately
+  confirmed departure permits a two-minute quiet re-arm, including after an
+  automatic command. The duplicate latch cannot expire on silence alone.
+  Unconfirmed short trips and a return within the same session can still be
+  missed; they do not justify clearing the latch.
 - An encounter with no verdict ends after `ENCOUNTER_QUIET_MS` of silence or
   `ENCOUNTER_MAX_MS` total. The scanner then re-arms after `REARM_NOVERDICT_MS`
   (2 min) of silence instead of the full `AWAY_MIN_MS`: a car that waited at
@@ -142,8 +148,10 @@ Controls, each requiring `CONTROL_TOKEN`:
 
 | Tag | Meaning |
 |---|---|
-| `VERDICT WOULD OPEN (strict)` | The firing rule fired. In v1 builds, followed by a `PULSE` line (LIVE) or a suppression line (DRY-RUN / DISABLED). `strict rule met but car is HOME` is the same signature seen on a departure or a door blip, held back by presence. |
-| `PRESENCE` | A beacon session ended: its count, duration, first and peak RSSI, ending median, the time before and after the peak, and the resulting HOME / AWAY (or "no transit, unchanged"). |
+| `VERDICT WOULD OPEN (strict)` | The firing rule fired. In v1 builds, followed by a `PULSE` line (LIVE) or a suppression line (DRY-RUN / DISABLED). `approach blocked` identifies the inferred location and duplicate latch; a separate `APPROACH` line records the rejected signal signature. |
+| `PRESENCE` | Inferred location, command latch, and the reason for a change or refusal. A pulse does not confirm location or door movement. |
+| `SESSION` | Completed session count, duration, first/peak/ending RSSI and time before/after the peak. Separate from the decision to avoid truncated evidence. |
+| `SIGNAL` | All states: one-second buckets with uptime start, sample span, count, first/last/min/max RSSI and exact bucket median. Replaces armed per-packet flash logging. |
 | `RELAXED` | The no-ramp comparison rule would have fired here. Never actuates. |
 | `REFUSE` | Wake-in-place signature; the encounter is latched non-fireable. |
 | `PULSE` | Actual, suppressed, refused or manual pulses, with the pad read-back and load check. |
@@ -167,12 +175,13 @@ Serial mirrors everything at 115200. WiFi loss never stops detection.
 Run `python3 tests/run_presence_tests.py` from `firmware/` (Python 3 and a
 C++17-capable `g++` required). The runner compiles the actual state-machine
 section of `src/main.cpp` with stubbed clock, logging, NVS and GPIO, for both
-logger and production configurations. It checks the recorded arrival's first
-eight RSSI samples, a below-threshold arrival tail, same-session reclassification,
-parked wakeups, a later departure/arrival, and the DISABLED/DRY-RUN/LIVE gates.
-Only the first eight arrival RSSIs are individual recorded packets; later
-session shapes are representative or adversarial test inputs. These checks do
-not validate radio reception, remote wiring, or physical door movement.
+logger and production configurations. Tests replay de-identified recorded
+weak approaches/departures and strong arrivals/departures, alongside synthetic
+parked wakeups, upper parking followed directly by a ramp approach, ambiguous
+sessions, short re-arm after confirmed departure, boot UNKNOWN, near-signal
+timing and the DISABLED/DRY-RUN/LIVE GPIO gates. Recorded fixtures have only
+second-resolution timing; millisecond gate boundaries use synthetic inputs.
+These checks do not validate radio reception or physical door movement.
 
 ### Runtime
 
@@ -198,7 +207,7 @@ not validate radio reception, remote wiring, or physical door movement.
   heartbeat. `WIFI_DUTY_TEST` in tunables alternates WiFi on and off inside
   one run so radio-quiet and WiFi-up windows can be compared directly.
 - **Partition scheme `min_spiffs`**: two app slots so OTA stays possible, and
-  a 128 KB LittleFS holding about two weeks of logs across the two rotation
+  a 128 KB LittleFS with traffic-dependent retention across the two rotation
   files.
 - The scanner itself is non-connectable and non-discoverable. Outside the
   census, other devices' addresses are never logged.

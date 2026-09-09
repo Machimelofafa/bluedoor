@@ -5,20 +5,16 @@
 // ---- state machine ----
 // Absence required before arming (and before a sighting can count as arrival)
 #define AWAY_MIN_MS            (10u * 60u * 1000u)
-// "Near enough" RSSI threshold for a would-open. Two calibrations, because the
-// two radios land ~10 dB apart at the same spot: the classic value was set for
-// the car head unit, the BLE one for the in-car beacon. The beacon figure comes
-// from a drive test: the car body costs ~20 dB and a closed garage door another
-// ~20, so a +9 dBm beacon reads around -84 in the garage and -77..-80 at the
-// door. Identity comes from the fixed MAC, so a loose threshold cannot let
-// another device false-trigger.
+// Opening requires near-ramp reception. The recorded upper-parking arrival
+// peaked at -88; the garage approach reached a four-packet median of -72.
+// -80 is an experimental separation, with a timed median gate below.
 #if DETECT_BLE
-#define RSSI_TRIGGER_DBM       (-90)
+#define RSSI_TRIGGER_DBM       (-80)
 #else
 #define RSSI_TRIGGER_DBM       (-80)
 #endif
 // Strict arrival = approach signature: >= this many sightings ...
-#define APPROACH_MIN_SIGHTINGS 3
+#define APPROACH_MIN_SIGHTINGS 8
 // ... with total RSSI rise (max - first) of at least this many dB
 #define APPROACH_MIN_RISE_DB   6
 // ... measured between the median of the first and of the last N sightings,
@@ -27,6 +23,10 @@
 // rule on a car that had not moved. The ramp must also last at least this long
 #define APPROACH_MEDIAN_N      4
 #define APPROACH_MIN_MS        (2u * 1000u)
+// Near medians and the latest sample must remain above the gate for 500 ms.
+// A weak sample or gap over 1500 ms resets this evidence; a burst is not enough.
+#define APPROACH_NEAR_MIN_MS   500u
+#define APPROACH_NEAR_MAX_GAP_MS 1500u
 // Relaxed rule (logged for comparison, never the primary verdict):
 // >= 2 sightings at/above RSSI_TRIGGER_DBM within this window
 #define RELAXED_MIN_SIGHTINGS  2
@@ -46,6 +46,7 @@
 // this much quiet, or this much total lingering
 #define ENCOUNTER_QUIET_MS     (90u * 1000u)
 #define ENCOUNTER_MAX_MS       (3u * 60u * 1000u)
+// Also applies after a separately confirmed departure, even during lockout.
 // After an encounter that ended WITHOUT a verdict (car lingered in range, then
 // left or went quiet), re-arm after this much silence instead of AWAY_MIN_MS.
 // 2026-09-06 00:38: the car waited 2 min at the ramp top (no ramp, no verdict),
@@ -55,32 +56,19 @@
 // the short re-arm, so the parked-car door-open blip keeps its 10 min cover.
 #define REARM_NOVERDICT_MS     (2u * 60u * 1000u)
 
-// ---- car presence (home / away) ----
-// A parked car is silent, so "no beacon for 10 min" is true both away and in
-// the garage. On 2026-09-06 three departures (beacon powering on at the parked
-// level, car then driving out past the scanner) fired the strict rule, and
-// both real arrivals were lost to the lockouts those verdicts caused. Presence
-// is therefore tracked from the shape of each beacon session. A session is one
-// run of sightings separated by PRESENCE_QUIET_MS of silence (60 s: a
-// departure prep showed 40 s pauses). A session with a transit (peak >=
-// PRESENCE_TRANSIT_DBM: the car passing the scanner, measured -67..-73 both
-// ways; parked reads -83..-96, an idling fragment once peaked -77) sets
-// presence from the time before and after that peak. An arrival is heard for
-// seconds, passes, then sits parked with the engine on and the USB grace
-// (54..88 s measured). A departure idles inside (17..170 s), passes, and is
-// out of range in 7..12 s. So: longer after the peak than before = HOME, else
-// AWAY. Received level cannot do this (the parked and ramp-top bands overlap;
-// a level rule misread two of three transits on 2026-09-06). Sessions without
-// a transit (door-open blip, a wait at the top of the ramp) change nothing.
-// An accepted strict arrival sets HOME immediately, even if its session never
-// reaches PRESENCE_TRANSIT_DBM. That same session cannot change presence again;
-// a separate departure session is needed to restore AWAY. This applies in all
-// run modes and is detection evidence, not confirmation that the door opened.
-// While HOME no encounter can fire. Boot assumes HOME, so the failure after a
-// reflash is a missed arrival, never a stray press; the status page can set
-// presence by hand.
+// ---- inferred garage presence and duplicate-command suppression ----
+// Weak upper-property activity does not establish garage occupancy. A command
+// sets a separate duplicate latch, and location stays UNKNOWN until a parked
+// tail is observed. Only a separate credible departure clears that latch.
+// Equal/short head-tail traces are ambiguous, not automatic departures.
+// Boot is UNKNOWN and blocks automatic pulses until movement establishes state.
 #define PRESENCE_QUIET_MS      (60u * 1000u)
 #define PRESENCE_TRANSIT_DBM   (-75)
+#define PRESENCE_PARKED_MIN_MS (15u * 1000u)
+#define PRESENCE_DEPARTURE_HEAD_MS (15u * 1000u)
+#define PRESENCE_DEPARTURE_TAIL_MS (15u * 1000u)
+#define PRESENCE_DIRECTION_MARGIN_MS (10u * 1000u)
+#define PRESENCE_FADED_DBM     (-85)
 
 // ---- classic BT scanning ----
 // Inquiry length in 1.28 s units (4 = 5.12 s per cycle, restarted continuously)
@@ -117,6 +105,7 @@
 #define PIN_REED               27
 
 // ---- logging ----
+#define SIGNAL_BUCKET_MS      1000u // all states: count, median, range, first/last
 // Trajectory label on sighting-aggregate and encounter summaries:
 // |last - first| >= this many dB logs as approaching/receding, else steady
 // (steady + strong = parked car woken in place, e.g. door opened)

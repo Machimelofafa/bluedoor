@@ -50,8 +50,10 @@ static void reset() {
   sysState = SysState::DisarmedBoot;
   stateSinceMs = lastEvidenceMs = lastSightMs = 0;
   shortRearm = false;
-  enc = {}; agg = {}; ses = {};
+  enc = {}; agg = {}; ses = {}; signalBucket = {};
   carHome = true;
+  presenceKnown = false;
+  arrivalLatched = departureConfirmed = false;
   firedCount = relaxedCount = refusalCount = totalSightings = 0;
 #if PULSE_ENABLED
   pulseCount = gpioHighWrites = 0;
@@ -72,96 +74,163 @@ static void armAway() {
   at(base);
   assert(sysState == SysState::Armed);
 }
+#include "recorded_sightings.h"
+
+template <size_t N>
+static void replay(uint32_t start, const RecordedSight (&packets)[N]) {
+  for (auto p : packets) sight(start + p.ms, p.rssi);
+}
+static void qualifiedApproach(uint32_t start) {
+  // Synthetic timestamps exercise the 500ms near gate independently of the
+  // recorded fixtures' one-second timestamp precision.
+  const int8_t values[] = {-98, -96, -97, -95, -78, -76, -74, -73, -75, -74, -73};
+  const uint32_t offsets[] = {0,100,200,300,2000,2100,2200,2300,2500,2700,2900};
+  for (unsigned i = 0; i < 11; ++i) sight(start + offsets[i], values[i]);
+}
 static void observedArrival() {
-  // First eight individual packets from the 2026-09-07 failed HOME update.
-  const int8_t rssi[] = {-99, -96, -85, -93, -89, -101, -88, -84};
-  const uint32_t offsets[] = {0, 100, 4000, 4500, 4700, 4800, 4900, 5100};
-  for (unsigned i = 0; i < 8; ++i) sight(base + offsets[i], rssi[i]);
+  qualifiedApproach(base);
   assert(firedCount == 1);
-  assert(carHome); // Regression: the old firmware leaves this AWAY.
+  assert(arrivalLatched && !presenceKnown); // A command is not garage evidence.
+}
+static void finishPark(uint32_t start) {
+  for (unsigned ms = 10000; ms <= 80000; ms += 10000) sight(start + ms, -92);
+  at(start + 80000 + PRESENCE_QUIET_MS + 1);
+  assert(presenceKnown && carHome && arrivalLatched);
 }
 static void arrivalAndParkedWake() {
-  armAway();
-  observedArrival();
-  // The real session peaked at -77, below the -75 transit threshold.
-  sight(base + 6000, -77);
-  sight(base + 60000, -93);
-  sight(base + 84000, -89);
-  at(base + 84000 + PRESENCE_QUIET_MS + 1);
-  assert(carHome);
-  at(base + 84000 + AWAY_MIN_MS);
+  armAway(); observedArrival(); finishPark(base);
+  at(base + 80000 + AWAY_MIN_MS);
   assert(sysState == SysState::Armed);
-  assert(carHome); // Silence at home is not a departure.
   const auto wake = clockMs + 1;
-  const int8_t ramp[] = {-99, -96, -85, -93, -89, -101, -88, -84};
-  for (unsigned i = 0; i < 8; ++i) sight(wake + i * 1000, ramp[i]);
-  assert(firedCount == 1); // Even a strict-looking parked wake cannot repeat.
+  qualifiedApproach(wake);
+  assert(firedCount == 1); // Even a strong parked wake cannot repeat.
   at(clockMs + PRESENCE_QUIET_MS + 1);
-  assert(carHome);
+  assert(carHome && arrivalLatched);
+}
+static void acceptedBelowTransitStillConfirmsPark() {
+  armAway();
+  const int8_t values[] = {-98,-97,-96,-95,-79,-78,-77,-76,-77,-77};
+  const uint32_t offsets[] = {0,100,200,300,2000,2100,2200,2300,2600,2800};
+  for (unsigned i=0;i<10;++i) sight(base + offsets[i], values[i]);
+  assert(firedCount == 1 && !presenceKnown && arrivalLatched);
+  assert(ses.peakRssi < PRESENCE_TRANSIT_DBM);
+  finishPark(base);
 }
 static void sameSessionCannotUndoArrival() {
-  armAway();
-  observedArrival();
-  // Synthetic adverse shape: a late strong peak must not undo acceptance.
-  sight(base + 45000, -70);
+  armAway(); observedArrival();
+  sight(base + 45000, -65);
   sight(base + 46000, -92);
   at(base + 46000 + PRESENCE_QUIET_MS + 1);
-  assert(carHome);
+  assert(arrivalLatched && !presenceKnown && !departureConfirmed);
+  // Silence does not silently release an unconfirmed command.
+  at(base + 46000 + AWAY_MIN_MS);
+  qualifiedApproach(clockMs + 1);
+  assert(firedCount == 1);
 }
 static void departureThenNextArrival() {
-  armAway();
-  observedArrival();
-  sight(base + 6000, -77);
-  sight(base + 60000, -92);
-  at(base + 60000 + AWAY_MIN_MS);
-  const auto departure = clockMs + 1;
-  // Representative samples with the observed departure's 224s/5s shape.
-  for (unsigned ms = 0; ms < 224000; ms += 30000)
-    sight(departure + ms, -92);
-  sight(departure + 224000, -65);
-  sight(departure + 229000, -92);
-  at(departure + 229000 + PRESENCE_QUIET_MS + 1);
-  assert(!carHome);
-  assert(firedCount == 1); // No opening while departing from HOME.
-  at(departure + 229000 + AWAY_MIN_MS);
-  assert(sysState == SysState::Armed);
-  const auto arrival = clockMs + 1;
-  const int8_t ramp[] = {-99, -96, -85, -93, -89, -101, -88, -84};
-  for (unsigned i = 0; i < 8; ++i) sight(arrival + i * 1000, ramp[i]);
-  assert(firedCount == 2);
-  assert(carHome);
+  armAway(); observedArrival(); finishPark(base);
+  const auto departure = clockMs + 1; // Still inside post-command lockout.
+  replay(departure, strongDeparture);
+  const auto last = departure + strongDeparture[sizeof(strongDeparture)/sizeof(*strongDeparture)-1].ms;
+  at(last + PRESENCE_QUIET_MS + 1);
+  assert(presenceKnown && !carHome && !arrivalLatched && departureConfirmed);
+  assert(firedCount == 1);
+  at(last + REARM_NOVERDICT_MS - 1);
+  assert(sysState != SysState::Armed);
+  at(last + REARM_NOVERDICT_MS);
+  assert(sysState == SysState::Armed); // Confirmed departure does not need 10min.
+  qualifiedApproach(clockMs + 1);
+  assert(firedCount == 2 && arrivalLatched);
 }
-static void unacceptedSessions() {
-  reset();
-  at(base);
-  assert(carHome && firedCount == 0);
-  sight(base + 1, -85);
-  sight(base + 1000, -83);
-  sight(base + 2000, -84);
-  at(base + 2000 + PRESENCE_QUIET_MS + 1);
-  assert(carHome && firedCount == 0);
+static void recordedUpperParkingThenReturn() {
+  // Bootstrap autonomously from UNKNOWN through an observed departure.
+  reset(); at(base);
+  replay(base, strongDeparture);
+  at(clockMs + REARM_NOVERDICT_MS);
+  assert(presenceKnown && !carHome && sysState == SysState::Armed);
+  replay(clockMs + 1, weakApproach);
+  at(clockMs + ENCOUNTER_QUIET_MS + 1);
+  at(clockMs + AWAY_MIN_MS);
+  assert(!carHome && presenceKnown && !arrivalLatched && firedCount == 0);
+  const auto departure = clockMs + 1;
+  replay(departure, weakDeparture);
+  at(clockMs + ENCOUNTER_QUIET_MS + 1);
+  at(clockMs + REARM_NOVERDICT_MS);
+  assert(!carHome && presenceKnown && firedCount == 0);
+  const auto arrival = clockMs + 1;
+  replay(arrival, strongArrival);
+  assert(firedCount == 1);
+  at(clockMs + PRESENCE_QUIET_MS + 1);
+  assert(carHome && presenceKnown && arrivalLatched);
+}
+static void outsideWaitThenRamp() {
   armAway();
-  sight(base + 1, -94);
-  sight(base + 2000, -90);
-  at(base + 2000 + PRESENCE_QUIET_MS + 1);
-  assert(!carHome && firedCount == 0);
+  replay(base, weakApproach);
+  // Continue from upper parking without a quiet period or separate encounter.
+  qualifiedApproach(clockMs + 1000);
+  assert(firedCount == 1);
+}
+static void ambiguousOrWeakSessionsDoNotClearHome() {
+  reset(); setPresence(true, "test garage"); at(base);
+  replay(base + 1, weakDeparture);
+  at(clockMs + PRESENCE_QUIET_MS + 1);
+  assert(carHome && !departureConfirmed);
+  const auto start = clockMs + 1;
+  sight(start, -92); sight(start + 20000, -70); sight(start + 39000, -92);
+  at(clockMs + PRESENCE_QUIET_MS + 1);
+  assert(carHome && !departureConfirmed); // Near-equal head/tail is ambiguous.
+}
+static void bootUnknown() {
+  reset(); at(base);
+  qualifiedApproach(clockMs + 1);
+  assert(!presenceKnown && firedCount == 0);
+  // Only subsequently observed location evidence resolves boot uncertainty.
+  at(clockMs + PRESENCE_QUIET_MS + 1);
+  assert(!presenceKnown && firedCount == 0);
+}
+static void nearEvidenceMustSpanTime() {
+  armAway();
+  const int8_t values[] = {-98,-97,-96,-95,-77,-75,-74,-73};
+  for (unsigned i=0;i<8;++i) sight(base + (i<4 ? i*100 : 2000+(i-4)*10), values[i]);
+  assert(firedCount == 0); // A burst does not qualify.
+  sight(base + 2040, -94); // Weak reception resets the hold.
+  for (unsigned i=0;i<4;++i) sight(base + 2100+i*10, -74);
+  assert(firedCount == 0);
+  sight(base + 2590, -74);
+  assert(firedCount == 0); // Only 490ms since the weak sample reset the hold.
+  sight(base + 2600, -74);
+  assert(firedCount == 1);
+  armAway();
+  for (unsigned i=0;i<8;++i) sight(base + (i<4 ? i*100 : 2000+(i-4)*10), values[i]);
+  sight(base + 5000, -74); // Long missing interval cannot count as a hold.
+  assert(firedCount == 0);
+}
+static void departureSignatureCannotOpen() {
+  reset(); setPresence(true, "test garage"); at(base);
+  replay(base + 1, strongDeparture);
+  assert(firedCount == 0);
+  at(clockMs + PRESENCE_QUIET_MS + 1);
+  assert(!carHome && presenceKnown);
 }
 int main() {
   arrivalAndParkedWake();
+  acceptedBelowTransitStillConfirmsPark();
   sameSessionCannotUndoArrival();
   departureThenNextArrival();
-  unacceptedSessions();
+  recordedUpperParkingThenReturn();
+  outsideWaitThenRamp();
+  ambiguousOrWeakSessionsDoNotClearHome();
+  bootUnknown();
+  nearEvidenceMustSpanTime();
+  departureSignatureCannotOpen();
 #if PULSE_ENABLED
   for (auto mode : {RunMode::Disabled, RunMode::DryRun, RunMode::Live}) {
-    armAway();
-    runMode = mode;
-    observedArrival();
+    armAway(); runMode = mode; observedArrival();
     const unsigned expected = mode == RunMode::Live ? 1 : 0;
     assert(pulseCount == expected && gpioHighWrites == expected);
-    clockMs += PULSE_MS;
-    pulseTick();
+    clockMs += PULSE_MS; pulseTick();
     assert(!pulseActive && outputLevel == LOW);
   }
 #endif
-  std::cout << "Presence regressions passed (PULSE_ENABLED=" << PULSE_ENABLED << ")\n";
+  std::cout << "Presence and recorded-route regressions passed (PULSE_ENABLED=" << PULSE_ENABLED << ")\n";
 }
