@@ -89,6 +89,16 @@ Boot location is UNKNOWN, so the first arrival after reboot may be missed
 until movement establishes location. Ambiguous or same-session short trips
 remain conservatively blocked.
 
+Departure recognition uses one-second medians and reception density. A
+sustained passage followed by either a quick substantial fade or a longer,
+sparse fading tail can confirm departure; a late weak packet no longer fails
+the old 15-second cutoff. The status page shows actual opening readiness and
+the blocking reason, separately from the scanner's listening state.
+
+The existing Uconnect head unit can corroborate parked activity through brief
+Classic Bluetooth checks. Its absence never proves departure, and it never
+triggers an arrival. BLE remains the signal used while the car is moving.
+
 Departures are not automated. You press the remote in the car as before.
 
 **One caveat you must understand before building this.** A remote press is
@@ -152,8 +162,8 @@ first/best/last RSSI trail, so you can read the whole approach out of the log
 without knowing anything in advance.
 
 What you are looking for: as the car approaches, the beacon's RSSI should rise
-by 6 dB or more over at least three sightings and end above the trigger
-threshold (`RSSI_TRIGGER_DBM`, default −90 dBm for the beacon). If it never
+by 6 dB or more over at least eight sightings and end above the trigger
+threshold (`RSSI_TRIGGER_DBM`, default −80 dBm for the beacon). If it never
 crosses the threshold, move the scanner closer to the approach path or loosen
 the threshold. Expect a closed garage door and the car's body to each cost
 around 20 dB.
@@ -189,7 +199,8 @@ cd firmware
 pio run -e v1-ble -t upload --upload-port bluedoor.local
 ```
 
-`v1-ble` is the production build. It boots in **DRY-RUN**: arrival verdicts
+`v1-ble` is the production build. Its first boot defaults to **DRY-RUN**;
+subsequent boots restore the selected mode. In DRY-RUN, arrival verdicts
 are logged as "pulse suppressed" and the pin is never driven. Three modes,
 switchable on the status page with your control token:
 
@@ -202,8 +213,10 @@ switchable on the status page with your control token:
 1. Stand at the door with a working remote in hand and use the **manual
    pulse** button on the status page. The door should respond to a 250 ms
    press. Ignores it: lengthen `PULSE_MS`. Double-triggers: shorten it.
-   Every pulse logs an electrical self-check of the pin and the optocoupler
-   path, which is the first place to look if nothing happens.
+   An independent hardware timer releases the output, and each command logs
+   the measured GPIO hold duration and pad levels. These measurements do not
+   confirm the remote's transmission or door movement. The former weak-pullup
+   "opto connected" check was inconclusive because of the 10 kΩ pulldown.
 2. Leave it in DRY-RUN for a week. Check every suppressed verdict against
    reality.
 3. When the log is clean, switch to LIVE.
@@ -227,7 +240,8 @@ and is documented there. The ones that matter:
 | `APPROACH_MIN_SIGHTINGS` / `APPROACH_MIN_RISE_DB` | 8 / 6 dB | the "rising ramp" definition |
 | `APPROACH_MEDIAN_N` / `APPROACH_MIN_MS` | 4 / 2 s | the rise is between medians of the first and last N sightings, over at least this long |
 | `APPROACH_NEAR_MIN_MS` / `APPROACH_NEAR_MAX_GAP_MS` | 500 / 1500 ms | require near evidence spanning time; weak reception or a long sample gap resets it |
-| `PRESENCE_TRANSIT_DBM` / `PRESENCE_QUIET_MS` | −75 / 60 s | strong movement threshold and session-ending silence; see firmware README for direction and parked-tail guards |
+| `JOURNEY_PASS_DBM` / `PRESENCE_QUIET_MS` | −82 / 60 s | sustained median passage and session-ending silence; direction/fade guards are also required |
+| `UCONNECT_HINT_ENABLED` | 1 | brief parked corroboration from the existing head unit, never arrival or departure from absence |
 | `WAKE_STRONG_DBM` / `WAKE_FLAT_DB` | −85 / 4 dB | the "parked car woken in place" signature, refused |
 | `PULSE_MS` | 250 ms | button press length |
 | `BLE_SURVEY` | 0 | log every advertiser heard (set to 1 for a census while commissioning; it fills the log in an hour) |

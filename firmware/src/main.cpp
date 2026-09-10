@@ -30,6 +30,7 @@
 #include "config.example.h"
 #endif
 #include "tunables.h"
+#include "journey.h"
 
 #include <WiFi.h>
 #include <WebServer.h>
@@ -48,6 +49,9 @@
 #include "esp_sntp.h"
 #include "esp_heap_caps.h"
 #include "esp_system.h"
+#include "driver/timer.h"
+#include "soc/gpio_struct.h"
+#include "esp_timer.h"
 
 #ifndef FW_VERSION
 #define FW_VERSION "dev"
@@ -71,6 +75,7 @@
 #ifndef SURVEY_CLASSIC
 #define SURVEY_CLASSIC 0
 #endif
+#define UCONNECT_AUX (DETECT_BLE && UCONNECT_HINT_ENABLED && !SURVEY_CLASSIC)
 #if SURVEY_CLASSIC && !DETECT_BLE
 #error "SURVEY_CLASSIC extends the BLE census; build it with DETECT_BLE=1"
 #endif
@@ -87,6 +92,7 @@
 #endif
 #if PULSE_ENABLED
 #define FW_ROLE "v1"
+#include "pulse_timer.h"
 #else
 #define FW_ROLE "logger"
 #endif
@@ -128,6 +134,9 @@ static constexpr uint32_t bcMagicHash(const char *s, uint32_t h) {
   return *s ? bcMagicHash(s + 1, h * 31u + (uint8_t)*s) : h;
 }
 #define BC_MAGIC bcMagicHash(__DATE__ " " __TIME__, 0xB1DE0011u)
+#if UCONNECT_AUX
+RTC_NOINIT_ATTR static uint32_t uconnectFlightMagic;
+#endif
 // 'ota' used to be the last crumb set before delay(10), so it covered nearly
 // all of the loop's wall time: every panic pointed there whatever the cause.
 // 'idle' now absorbs the delay, so 'ota' means ArduinoOTA.handle() for real and
@@ -215,16 +224,11 @@ static bool otaPasswordUsable() {
   return OTA_PASSWORD[0] != '\0' && strcmp(OTA_PASSWORD, "change-me") != 0;
 }
 
-static void logEvent(const char *tag, const String &msg) {
-  char line[224];
-  snprintf(line, sizeof(line), "%s [B%03u] %-7s %s", tsNow().c_str(),
-           (unsigned)bootCount, tag, msg.c_str());
-  Serial.println(line);
-
-  strlcpy(ring[ringHead], line, RING_LINE_LEN);
-  ringHead = (ringHead + 1) % RING_LINES;
-  if (ringCount < RING_LINES) ringCount++;
-
+static bool pulseIsRunning();
+static char deferredLogs[16][224];
+static uint8_t deferredLogCount = 0;
+static uint32_t deferredLogDrops = 0;
+static void appendLogLine(const char *line) {
   File f = LittleFS.open(LOG_CUR, FILE_APPEND);
   if (!f) return;
   f.println(line);
@@ -242,20 +246,56 @@ static void logEvent(const char *tag, const String &msg) {
   }
 }
 
+static void flushDeferredLogs() {
+  if (pulseIsRunning()) return;
+  for (unsigned i = 0; i < deferredLogCount; ++i) appendLogLine(deferredLogs[i]);
+  deferredLogCount = 0;
+}
+
+static void logEvent(const char *tag, const String &msg) {
+  char line[224];
+  snprintf(line, sizeof(line), "%s [B%03u] %-7s %s", tsNow().c_str(),
+           (unsigned)bootCount, tag, msg.c_str());
+  Serial.println(line);
+  strlcpy(ring[ringHead], line, RING_LINE_LEN);
+  ringHead = (ringHead + 1) % RING_LINES;
+  if (ringCount < RING_LINES) ringCount++;
+  if (pulseIsRunning()) {
+    if (deferredLogCount < 16) strlcpy(deferredLogs[deferredLogCount++], line, sizeof(line));
+    else ++deferredLogDrops;
+  } else {
+    flushDeferredLogs();
+    appendLogLine(line);
+  }
+}
+
 // ------------------------------------------------------------- BT plumbing
 
-enum class BtEvKind : uint8_t { Sighting, InquiryDone, ProbeResult };
+enum class BtEvKind : uint8_t { Sighting, InquiryDone, ProbeResult, Uconnect, AuxDone };
 
 struct BtEv {
   BtEvKind kind;
   int8_t rssi;
   bool ok;
   char name[33];
+  uint32_t receivedMs;
 };
 
 static QueueHandle_t btQueue;
+static std::atomic<uint32_t> btQueueDrops{0};
+static uint32_t btQueueDropsSeen = 0, btQueueHighWater = 0;
+static uint32_t radioMaxDelayMs = 0, radioStaleEvents = 0;
+static uint32_t hbSightings = 0, hbCycles = 0;
+static void queueBtEvent(BtEv ev, uint32_t receivedMs) {
+  ev.receivedMs = receivedMs;
+  if (xQueueSend(btQueue, &ev, 0) != pdTRUE) btQueueDrops++;
+}
 static esp_bd_addr_t carAddr;
 static bool carMacIsPlaceholder = false;
+#if UCONNECT_AUX
+static esp_bd_addr_t uconnectAddr;
+static bool uconnectConfigured = false;
+#endif
 
 // diagnostics updated from the BT callback task
 static std::atomic<uint32_t> otherDevReports{0};
@@ -366,6 +406,7 @@ static void surveyRecord(const uint8_t *bda, bool classic, int8_t rssi, const ch
 #endif  // DETECT_BLE && BLE_SURVEY
 
 static void gapCallback(esp_bt_gap_cb_event_t event, esp_bt_gap_cb_param_t *param) {
+  const uint32_t receivedMs = millis();
   switch (event) {
     case ESP_BT_GAP_DISC_RES_EVT: {
       bool hasRssi = false;
@@ -399,7 +440,14 @@ static void gapCallback(esp_bt_gap_cb_event_t event, esp_bt_gap_cb_param_t *para
       // signal samples only
       if (hasRssi) surveyRecord(param->disc_res.bda, true, rssi, name);
 #endif
-      if (memcmp(param->disc_res.bda, carAddr, 6) == 0) {
+#if UCONNECT_AUX
+      if (uconnectConfigured && hasRssi &&
+          memcmp(param->disc_res.bda, uconnectAddr, 6) == 0) {
+        // Never feed Classic RSSI into the BLE approach pipeline.
+        queueBtEvent({BtEvKind::Uconnect, rssi, true, {0}}, receivedMs);
+      }
+#endif
+      if (!DETECT_BLE && memcmp(param->disc_res.bda, carAddr, 6) == 0) {
         radCarReports++;
         // GAP delivers name-discovery results here too, without an RSSI prop;
         // those must not enter the RSSI pipeline as the +127 init value
@@ -409,7 +457,7 @@ static void gapCallback(esp_bt_gap_cb_event_t event, esp_bt_gap_cb_param_t *para
         }
         BtEv ev{BtEvKind::Sighting, rssi, true, {0}};
         strlcpy(ev.name, name, sizeof(ev.name));
-        xQueueSend(btQueue, &ev, 0);
+        queueBtEvent(ev, receivedMs);
       } else {
         // neighbors' devices: counted for diagnostics, never identified/logged
         otherDevReports++;
@@ -419,15 +467,15 @@ static void gapCallback(esp_bt_gap_cb_event_t event, esp_bt_gap_cb_param_t *para
     }
     case ESP_BT_GAP_DISC_STATE_CHANGED_EVT:
       if (param->disc_st_chg.state == ESP_BT_GAP_DISCOVERY_STOPPED) {
-        BtEv ev{BtEvKind::InquiryDone, 0, true, {0}};
-        xQueueSend(btQueue, &ev, 0);
+        BtEv ev{UCONNECT_AUX ? BtEvKind::AuxDone : BtEvKind::InquiryDone, 0, true, {0}};
+        queueBtEvent(ev, receivedMs);
       }
       break;
     case ESP_BT_GAP_READ_REMOTE_NAME_EVT: {
       BtEv ev{BtEvKind::ProbeResult, 0,
               param->read_rmt_name.stat == ESP_BT_STATUS_SUCCESS, {0}};
       if (ev.ok) strlcpy(ev.name, (const char *)param->read_rmt_name.rmt_name, sizeof(ev.name));
-      xQueueSend(btQueue, &ev, 0);
+      queueBtEvent(ev, receivedMs);
       break;
     }
     default:
@@ -468,6 +516,7 @@ static esp_ble_scan_params_t bleScanParams = {
 };
 
 static void bleGapCallback(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param_t *param) {
+  const uint32_t receivedMs = millis();
   switch (event) {
     case ESP_GAP_BLE_SCAN_PARAM_SET_COMPLETE_EVT:
       esp_ble_gap_start_scanning(0);   // 0 = until explicitly stopped
@@ -489,7 +538,7 @@ static void bleGapCallback(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param_t 
         radCarReports++;
         BtEv ev{BtEvKind::Sighting, rssi, true, {0}};
         strlcpy(ev.name, name, sizeof(ev.name));
-        xQueueSend(btQueue, &ev, 0);
+        queueBtEvent(ev, receivedMs);
       } else {
         otherDevReports++;
         if (rssi > otherBestRssi) otherBestRssi = rssi;
@@ -520,24 +569,27 @@ static bool initBt() {
   // BTDM libs: esp_bt_controller_init rejects both a BLE cfg.mode (must equal
   // the compiled mode, boot #38) and the default cfg after mem_release(CLASSIC)
   // (its memory check, boot #39). So run the controller dual-mode via btStart()
-  // like the classic build and simply never touch classic — the overnight soak
+  // like the classic build. Continuous inquiry remains off — the overnight soak
   // pinned the crashes on continuous inquiry (rwbt.c assert, hli_vectors int-wdt
-  // stalls), not on the classic stack existing.
+  // stalls), not on the classic stack existing. Optional Uconnect corroboration
+  // uses short, rate-limited parked checks with timeout/crash containment.
   if (!btStart()) {
     logEvent("ERR", "btStart failed");
     return false;
   }
   if (!btStep("bluedroid_init", esp_bluedroid_init())) return false;
   if (!btStep("bluedroid_enable", esp_bluedroid_enable())) return false;
-#if SURVEY_CLASSIC
+#if SURVEY_CLASSIC || UCONNECT_AUX
   // census across both radios: classic inquiry sweeps alongside the BLE scan
   // (scanner only — stay invisible and unconnectable ourselves)
   if (!btStep("classic_gap_register", esp_bt_gap_register_callback(gapCallback))) return false;
   esp_bt_gap_set_scan_mode(ESP_BT_NON_CONNECTABLE, ESP_BT_NON_DISCOVERABLE);
+#if SURVEY_CLASSIC
   if (!btStep("classic_inquiry",
               esp_bt_gap_start_discovery(ESP_BT_INQ_MODE_GENERAL_INQUIRY, INQ_LEN_UNITS, 0)))
     return false;
   lastClassicDoneMs = millis();
+#endif
 #endif
   if (!btStep("gap_register", esp_ble_gap_register_callback(bleGapCallback))) return false;
   // starts the scan (the callback chains param-set completion into scanning)
@@ -574,6 +626,7 @@ static uint32_t firedCount = 0;       // NVS
 static uint32_t relaxedCount = 0;     // NVS
 static uint32_t refusalCount = 0;     // NVS
 static String lastVerdict = "none yet";
+static bool countsDirty = false;
 
 // encounter = sighting cluster while Armed
 struct Sight { uint32_t ms; int8_t rssi; };
@@ -583,7 +636,7 @@ static struct {
   uint32_t nearSinceMs = 0, nearLastMs = 0;
   int8_t firstRssi = 0, lastRssi = 0, minRssi = 0, maxRssi = 0;
   uint16_t count = 0;
-  bool relaxedFlagged = false, wakeFlagged = false, homeFlagged = false;
+  bool relaxedFlagged = false, wakeFlagged = false, homeFlagged = false, staleFlagged = false;
   Sight recent[8];
   uint8_t rIdx = 0;
   int8_t firstN[APPROACH_MEDIAN_N];   // the first sightings, for the ramp's start median
@@ -607,6 +660,9 @@ static bool arrivalLatched = false;
 static bool departureConfirmed = false;
 static uint32_t presenceSinceMs = 0;
 static String presenceWhy = "unknown after boot; waiting for observed movement";
+static bool radioLossPending = false;
+static uint32_t radioLossMs = 0;
+static JourneyEvidence journey;
 
 static const char *presenceName() {
   return !presenceKnown ? "UNKNOWN" : (carHome ? "GARAGE (inferred)" : "OUTSIDE GARAGE (inferred)");
@@ -614,12 +670,20 @@ static const char *presenceName() {
 static struct {
   bool active = false;
   bool arrivalAccepted = false;
+  bool incomplete = false, uconnectSeen = false, uconnectChecked = false;
   uint32_t startMs = 0, lastMs = 0, peakMs = 0;
   int8_t firstRssi = 0, peakRssi = -127;
   uint16_t count = 0;
   int8_t ring[8];
   uint8_t rIdx = 0, rN = 0;
 } ses;
+
+static void noteRadioLoss() {
+  radioLossPending = true;
+  radioLossMs = millis();
+  if (ses.active) ses.incomplete = true;
+  logEvent("RADIO", "queue overflow: movement evidence incomplete; automatic commands blocked this session");
+}
 
 static int8_t medianOf(const int8_t *v, int n) {
   int8_t t[8];
@@ -647,6 +711,8 @@ static void flushSignalBucket() {
     cumulative += signalBucket.bins[i];
     if (cumulative > (signalBucket.count - 1u) / 2u) { med = i - 127; break; }
   }
+  if (ses.active)
+    journey.add({signalBucket.startMs, signalBucket.lastMs, signalBucket.count, (int8_t)med});
   logEvent("SIGNAL", String("ms=") + signalBucket.startMs +
            " span=" + (signalBucket.lastMs - signalBucket.startMs) +
            " n=" + signalBucket.count + " first=" + signalBucket.first +
@@ -697,25 +763,36 @@ static void endSession() {
   // Separate the full evidence record from the short decision line so neither
   // is truncated by the flash log or the status-page ring buffer.
   logEvent("SESSION", sum);
+  logEvent("JOURNEY", String("pass=") + journey.passage +
+           " head_ms=" + journey.headMs() + " tail_ms=" + journey.tailMs() +
+           " pre_n=" + journey.packetsAtPass + " tail_n=" + journey.tailPackets() +
+           " end=" + journey.endingMedian() + " fade=" + journey.departureCandidate() +
+           " loss=" + ses.incomplete + " uconnect=" + ses.uconnectSeen);
+  if (ses.incomplete) {
+    logEvent("PRESENCE", "incomplete radio evidence; location and duplicate latch retained");
+    return;
+  }
   if (ses.arrivalAccepted) {
     // An accepted approach may infer garage presence only after a parked tail.
     // Ambiguous sessions retain their duplicate latch, never reclassify AWAY.
-    if (tail >= PRESENCE_PARKED_MIN_MS && tail > head && endMed < RSSI_TRIGGER_DBM)
+    if (journey.parkedTail())
       setPresence(true, "accepted approach followed by parked tail; door movement unknown");
     else
       logEvent("PRESENCE", "accepted approach unconfirmed; location UNKNOWN, duplicate latch retained");
     return;
   }
-  if (ses.peakRssi < PRESENCE_TRANSIT_DBM) {
-    logEvent("PRESENCE", String("no transit, location unchanged: ") + presenceName());
+  if (!journey.passage) {
+    if (ses.uconnectSeen && !presenceKnown &&
+        ses.lastMs - ses.startMs >= UCONNECT_SETTLE_MS)
+      setPresence(true, "stationary beacon corroborated by Uconnect; garage inferred");
+    else
+      logEvent("PRESENCE", String("no transit, location unchanged: ") + presenceName());
     return;
   }
-  if (tail > head && tail >= PRESENCE_PARKED_MIN_MS) {
+  if (journey.parkedTail()) {
     setPresence(true, "transit followed by parked tail");
-  } else if (head >= PRESENCE_DEPARTURE_HEAD_MS &&
-             head >= tail + PRESENCE_DIRECTION_MARGIN_MS &&
-             tail <= PRESENCE_DEPARTURE_TAIL_MS && endMed <= PRESENCE_FADED_DBM) {
-    setPresence(false, "separate departure: idle, transit, fade and silence");
+  } else if (journey.departureCandidate()) {
+    setPresence(false, "departure: sustained passage, thinning fade and silence");
     departureConfirmed = true;
   } else {
     logEvent("PRESENCE", String("ambiguous transit, location unchanged: ") + presenceName());
@@ -779,8 +856,12 @@ static void endEncounter(const String &why) {
 enum class RunMode : uint8_t { Disabled = 0, DryRun = 1, Live = 2 };
 static RunMode runMode = RunMode::DryRun;
 static uint32_t pulseCount = 0;  // NVS
-static bool pulseActive = false;
-static uint32_t pulseOffAtMs = 0;
+static volatile bool pulseActive = false, pulseCompleted = false;
+static volatile uint32_t pulseStartUs = 0, pulseEndUs = 0;
+static volatile bool pulseHighAtRelease = false;
+static uint32_t pulseRequestedMs = 0, lastPulseDurationUs = 0;
+static volatile bool timerSelfCheckPending = false;
+static volatile uint32_t timerSelfCheckStartUs = 0, timerSelfCheckUs = 0;
 static String lastPulseInfo = "never";
 
 static const char *modeName(RunMode m) {
@@ -792,45 +873,73 @@ static const char *modeName(RunMode m) {
   return "?";
 }
 
-static void doPulse(const char *source, uint32_t ms = PULSE_MS) {
+static bool IRAM_ATTR pulseTimeout(void *) {
+  if (timerSelfCheckPending) {
+    timerSelfCheckUs = pulseMicros() - timerSelfCheckStartUs;
+    timerSelfCheckPending = false;
+    return false; // Timer-only boot test: never raises or pulses the GPIO.
+  }
+  if (pulseActive) {
+    pulseHighAtRelease = pulsePadHigh();
+    pulsePinLow();
+    pulseEndUs = pulseMicros();
+    pulseCompleted = true;
+    pulseActive = false;
+  }
+  return false;
+}
+
+static bool doPulse(const char *source, uint32_t ms = PULSE_MS) {
+  if (pulseActive || pulseCompleted) {
+    logEvent("PULSE", "REFUSED: previous pulse active or awaiting completion report");
+    return false;
+  }
+  if (!preparePulseTimer(ms)) {
+    logEvent("PULSE", "REFUSED: independent pulse timer unavailable");
+    return false;
+  }
 #if REED_ENABLED
   if (digitalRead(PIN_REED) != LOW) {
     logEvent("PULSE", String("REFUSED (") + source + "): reed says door not closed");
-    return;
+    return false;
   }
 #endif
-  pulseCount++;
-  prefs.putUInt("pulses", pulseCount);
   lastPulseInfo = tsNow() + " (" + source + ")";
   logEvent("PULSE", String("*** PULSING REMOTE *** (") + source + ", " +
                         String((unsigned)ms) + "ms on GPIO " + String(PIN_PULSE) + ")");
-  // Load self-test: float the pin on its ~45k internal pull-up for a moment.
-  // The opto LED path (330R + LED to GND) drags it below the input threshold;
-  // if it stays HIGH, nothing is connected (loose jumper, open joint).
-  pinMode(PIN_PULSE, INPUT_PULLUP);
-  delayMicroseconds(300);
-  bool loaded = digitalRead(PIN_PULSE) == LOW;
-  pinMode(PIN_PULSE, OUTPUT);
-  digitalWrite(PIN_PULSE, HIGH);
+  // The 10k pulldown defeats the former weak-pullup "opto connected" test.
+  // Keep the pin as OUTPUT and report only what the pad actually establishes.
+  pulseRequestedMs = ms;
+  pulseStartUs = pulseMicros();
   pulseActive = true;
-  pulseOffAtMs = millis() + ms;
-  logEvent("PULSE", String("load check: pin ") + PIN_PULSE +
-                        (loaded ? " pulled LOW on its weak pull-up — opto LED path is connected"
-                                : " floats HIGH on its weak pull-up — NOTHING connected to the pin"));
+  digitalWrite(PIN_PULSE, HIGH);
+  if (!startPulseTimer()) {
+    pulsePinLow();
+    pulseActive = false;
+    pulseTimerReady = false;
+    logEvent("PULSE", "ERROR: timer start failed; output immediately released");
+    return false;
+  }
+  pulseCount++;
+  countsDirty = true;
   // Arduino OUTPUT (0x03) keeps the input buffer on, so this reads the real
   // pad level: LOW here means the pin is held down externally or dead.
   delayMicroseconds(100);
   logEvent("PULSE", String("GPIO ") + PIN_PULSE + " pad reads back " +
-                        (digitalRead(PIN_PULSE) ? "HIGH" : "LOW") + " while driven HIGH");
+                        (digitalRead(PIN_PULSE) ? "HIGH" : "LOW") +
+                        " while driven HIGH; timer owns release");
+  return true;
 }
 
 static void pulseTick() {
-  if (pulseActive && (int32_t)(millis() - pulseOffAtMs) >= 0) {
-    bool pad = digitalRead(PIN_PULSE);
-    digitalWrite(PIN_PULSE, LOW);
-    pulseActive = false;
-    logEvent("PULSE", String("pulse complete, output LOW (pad read ") +
-                          (pad ? "HIGH" : "LOW") + " just before release)");
+  if (pulseCompleted && !pulseActive) {
+    lastPulseDurationUs = pulseEndUs - pulseStartUs;
+    pulseCompleted = false;
+    logEvent("PULSE", String("complete: requested_ms=") + pulseRequestedMs +
+             " gpio_us=" + lastPulseDurationUs + " start_us=" + pulseStartUs +
+             " end_us=" + pulseEndUs + " high_before=" + pulseHighAtRelease +
+             " low_after=" + !pulsePadHigh());
+    logEvent("PULSE", "command delivered to GPIO; remote transmission and door movement unobserved");
   }
 }
 
@@ -850,9 +959,87 @@ static void actuateOnVerdict() {
 }
 #endif  // PULSE_ENABLED
 
+static bool pulseIsRunning() {
+#if PULSE_ENABLED
+  return pulseActive;
+#else
+  return false;
+#endif
+}
+
+static const char *readinessName() {
+#if PULSE_ENABLED
+  if (runMode == RunMode::Disabled) return "AUTOMATIC OPENING DISABLED";
+  if (!pulseTimerReady) return "BLOCKED: pulse timer unavailable";
+  if (pulseActive || pulseCompleted) return "REMOTE PULSE IN PROGRESS";
+#endif
+  if (radioLossPending || (ses.active && ses.incomplete)) return "WAITING: incomplete radio evidence";
+  if (ses.active && !ses.arrivalAccepted && journey.departureCandidate())
+    return "WAITING: departure fade observed, confirming silence";
+  if (!presenceKnown) return arrivalLatched ? "BLOCKED: previous approach needs departure confirmation" :
+                                            "WAITING: garage location unknown";
+  if (carHome) return "BLOCKED: car inferred in garage";
+  if (arrivalLatched) return "BLOCKED: previous opening needs departure confirmation";
+  if (sysState != SysState::Armed) return "WAITING: absence timer";
+#if PULSE_ENABLED
+  if (runMode == RunMode::DryRun) return "READY TO DETECT: dry-run, no opening";
+  return "READY TO OPEN ON APPROACH";
+#else
+  return "READY TO DETECT: logger, no opening";
+#endif
+}
+
+#if UCONNECT_AUX
+static bool uconnectScanActive = false, uconnectScanFault = false, uconnectEverChecked = false;
+static bool uconnectCancelRequested = false;
+static uint32_t uconnectScanStartMs = 0, uconnectSessionMs = 0, uconnectLastCheckMs = 0;
+static uint32_t uconnectLastSeenMs = 0, uconnectChecks = 0;
+static int8_t uconnectLastRssi = 127;
+static bool canCheckUconnect(uint32_t now) {
+  return !uconnectScanActive && !uconnectScanFault && !pulseIsRunning() &&
+         ses.active && !ses.incomplete && !ses.uconnectChecked &&
+         (!presenceKnown || carHome || ses.arrivalAccepted) &&
+         now - ses.startMs >= UCONNECT_SETTLE_MS && now - ses.lastMs <= 2000 &&
+         (!uconnectEverChecked || now - uconnectLastCheckMs >= UCONNECT_INTERVAL_MS) &&
+         (ses.peakRssi < RSSI_TRIGGER_DBM ||
+          (ses.arrivalAccepted && journey.parkedTail() &&
+           now - journey.passEndMs >= UCONNECT_SETTLE_MS));
+}
+static void beginUconnectCheck(uint32_t now) {
+  uconnectScanActive = uconnectEverChecked = true;
+  uconnectCancelRequested = false;
+  ses.uconnectChecked = true;
+  uconnectScanStartMs = uconnectLastCheckMs = now;
+  uconnectSessionMs = ses.startMs;
+  ++uconnectChecks;
+}
+static void onUconnectSighting(int8_t rssi, uint32_t receivedMs) {
+  if (!uconnectScanActive || (int32_t)(receivedMs - uconnectScanStartMs) < 0 ||
+      receivedMs - uconnectScanStartMs > UCONNECT_TIMEOUT_MS ||
+      !ses.active || ses.startMs != uconnectSessionMs) return;
+  uconnectLastSeenMs = receivedMs;
+  uconnectLastRssi = rssi;
+  if (rssi >= UCONNECT_NEAR_DBM && !ses.incomplete &&
+      (!journey.passage || ses.arrivalAccepted)) {
+    ses.uconnectSeen = true;
+    logEvent("UCONNECT", String("parked-activity corroboration, rssi=") + rssi +
+             "; never an arrival trigger or evidence of door movement");
+  }
+}
+#endif
+
+static void persistCountersTick() {
+  if (!countsDirty || pulseIsRunning()) return;
+  prefs.putUInt("fired", firedCount);
+#if PULSE_ENABLED
+  prefs.putUInt("pulses", pulseCount);
+#endif
+  countsDirty = false;
+}
+
 static void fireWouldOpen() {
   firedCount++;
-  prefs.putUInt("fired", firedCount);
+  countsDirty = true;
   lastVerdict = tsNow() + "  WOULD-OPEN (strict): " + encSummary();
   logEvent("VERDICT", "*** WOULD OPEN *** (strict rule) " + encSummary());
   ses.arrivalAccepted = true;
@@ -869,10 +1056,16 @@ static void fireWouldOpen() {
   setState(SysState::DisarmedLockout, "would-open fired");
 }
 
-static void onCarSighting(int8_t rssi, const char *name) {
-  uint32_t now = millis();
+static void machineTick(uint32_t now = millis());
+
+static void onCarSighting(int8_t rssi, const char *name, uint32_t now = millis()) {
+  if (totalSightings && (int32_t)(now - lastSightMs) < 0) {
+    noteRadioLoss();
+    return;
+  }
+  // Advance evidence-time before the packet, not wall time after queued work.
+  machineTick(now);
   totalSightings++;
-  recordSignal(now, rssi);
   lastEvidenceMs = now;
   lastSightMs = now;
   lastSightRssi = rssi;
@@ -883,12 +1076,17 @@ static void onCarSighting(int8_t rssi, const char *name) {
     ses.active = true;
     departureConfirmed = false;
     ses.arrivalAccepted = false;
+    ses.incomplete = radioLossPending;
+    ses.uconnectSeen = false;
+    ses.uconnectChecked = false;
+    journey = {};
     ses.startMs = ses.peakMs = now;
     ses.firstRssi = rssi;
     ses.peakRssi = -127;
     ses.count = 0;
     ses.rIdx = ses.rN = 0;
   }
+  recordSignal(now, rssi);
   ses.lastMs = now;
   if (ses.count < 65535) ses.count++;
   if (rssi > ses.peakRssi) { ses.peakRssi = rssi; ses.peakMs = now; }
@@ -903,7 +1101,7 @@ static void onCarSighting(int8_t rssi, const char *name) {
       enc.nearSinceMs = enc.nearLastMs = 0;
       enc.firstRssi = enc.minRssi = enc.maxRssi = rssi;
       enc.count = 0;
-      enc.relaxedFlagged = enc.wakeFlagged = enc.homeFlagged = false;
+      enc.relaxedFlagged = enc.wakeFlagged = enc.homeFlagged = enc.staleFlagged = false;
       enc.rIdx = 0;
       memset(enc.recent, 0, sizeof(enc.recent));
       logEvent("ENC", "encounter started: first sighting after away period, rssi " +
@@ -970,7 +1168,12 @@ static void onCarSighting(int8_t rssi, const char *name) {
                   now - enc.startMs >= APPROACH_MIN_MS &&
                   near && now - enc.nearSinceMs >= APPROACH_NEAR_MIN_MS &&
                   (enc.lastMed - enc.firstMed) >= APPROACH_MIN_RISE_DB;
-      if (ramp && (!presenceKnown || carHome || arrivalLatched)) {
+      if (ramp && (ses.incomplete || radioLossPending || millis() - now > RADIO_MAX_ACTUATION_AGE_MS)) {
+        if (!enc.staleFlagged) {
+          enc.staleFlagged = true;
+          logEvent("VERDICT", "approach blocked: delayed or incomplete radio evidence");
+        }
+      } else if (ramp && (!presenceKnown || carHome || arrivalLatched)) {
         if (!enc.homeFlagged) {
           enc.homeFlagged = true;
           logEvent("VERDICT", String("approach blocked: location=") + presenceName() +
@@ -1045,12 +1248,13 @@ static void onProbeResult(bool ok, const char *name) {
   lastProbeOk = ok;
 }
 
-static void machineTick() {
-  uint32_t now = millis();
+static void machineTick(uint32_t now) {
   if (signalBucket.active && now - signalBucket.startMs >= SIGNAL_BUCKET_MS)
     flushSignalBucket();
 
   if (ses.active && now - ses.lastMs > PRESENCE_QUIET_MS) endSession();
+  if (radioLossPending && !ses.active && (int32_t)(now - radioLossMs) > (int32_t)PRESENCE_QUIET_MS)
+    radioLossPending = false;
 
   if (enc.active) {
     if (now - enc.lastMs > ENCOUNTER_QUIET_MS) {
@@ -1088,8 +1292,35 @@ static void machineTick() {
 // it periodically as a liveness watchdog, and keep the RADIO census's "cycles"
 // meaningful as scan restarts rather than inquiry sweeps.
 static void scanTick() {
-  if (otaActive) return;
+  if (otaActive || !btQueue) return;
   uint32_t now = millis();
+#if UCONNECT_AUX
+  if (uconnectScanActive) {
+    if (now - uconnectScanStartMs > UCONNECT_TIMEOUT_MS) {
+      if (!uconnectCancelRequested) esp_bt_gap_cancel_discovery();
+      uconnectScanFault = true;
+      uconnectScanActive = false;
+      logEvent("UCONNECT", "check timeout; further Classic checks disabled this boot, BLE continues");
+    } else if (!uconnectCancelRequested && now - lastSightMs <= 2000 && lastSightRssi >= RSSI_TRIGGER_DBM) {
+      uconnectCancelRequested = true;
+      esp_bt_gap_cancel_discovery();
+    }
+  }
+  if (uconnectConfigured && uxQueueMessagesWaiting(btQueue) == 0 && canCheckUconnect(now)) {
+    beginUconnectCheck(now);
+    uconnectFlightMagic = BC_MAGIC;
+    const esp_err_t err = esp_bt_gap_start_discovery(ESP_BT_INQ_MODE_GENERAL_INQUIRY,
+                                                   UCONNECT_SCAN_UNITS, 0);
+    if (err != ESP_OK) {
+      uconnectScanActive = false;
+      uconnectScanFault = true;
+      uconnectFlightMagic = 0;
+      logEvent("UCONNECT", "check unavailable; further Classic checks disabled this boot");
+    } else {
+      logEvent("UCONNECT", "bounded parked check started (1.28s); BLE remains primary");
+    }
+  }
+#endif
   if (now - lastInqDoneMs >= BLE_SCAN_RESTART_MS) {
     lastInqDoneMs = now;
     inqCycles++;
@@ -1199,6 +1430,55 @@ static void onInquiryDone() {
 }
 #endif  // DETECT_BLE
 
+// Cooperatively drain radio events between HTTP chunks as well as loop ticks.
+static void serviceRadio() {
+  if (!btQueue) return;
+  BtEv ev;
+  crumb(1);
+  const uint32_t drops = btQueueDrops.load();
+  if (drops != btQueueDropsSeen) { btQueueDropsSeen = drops; noteRadioLoss(); }
+  const uint32_t depth = uxQueueMessagesWaiting(btQueue);
+  if (depth > btQueueHighWater) btQueueHighWater = depth;
+  for (unsigned n = 0; n < RADIO_EVENTS_PER_LOOP && xQueueReceive(btQueue, &ev, 0) == pdTRUE; ++n) {
+    const uint32_t lag = millis() - ev.receivedMs;
+    if (lag > radioMaxDelayMs) radioMaxDelayMs = lag;
+    if (lag > RADIO_MAX_ACTUATION_AGE_MS) ++radioStaleEvents;
+    switch (ev.kind) {
+      case BtEvKind::Sighting:
+        hbSightings++;
+        onCarSighting(ev.rssi, ev.name, ev.receivedMs);
+        break;
+      case BtEvKind::InquiryDone:
+        hbCycles++;
+        onInquiryDone();
+        break;
+      case BtEvKind::ProbeResult:
+        onProbeResult(ev.ok, ev.name);
+        if (scanMode == ScanMode::Probe) startInquiry();
+        break;
+      case BtEvKind::Uconnect:
+#if UCONNECT_AUX
+        onUconnectSighting(ev.rssi, ev.receivedMs);
+#endif
+        break;
+      case BtEvKind::AuxDone:
+#if UCONNECT_AUX
+        uconnectFlightMagic = 0;
+        if (uconnectScanActive && (int32_t)(ev.receivedMs - uconnectScanStartMs) >= 0) {
+          uconnectScanActive = false;
+          uconnectCancelRequested = false;
+          logEvent("UCONNECT", "bounded check complete; no response never establishes departure");
+        }
+#endif
+        break;
+    }
+  }
+
+#if PULSE_ENABLED
+  pulseTick();
+#endif
+}
+
 // -------------------------------------------------------------------- web
 
 static String htmlEscape(const String &s) {
@@ -1220,8 +1500,10 @@ static String htmlEscape(const String &s) {
 // dropping to 15 KB whenever someone loads it. Chunked, it costs ~1 KB.
 static void chunk(String &h, bool force = false) {
   if (h.length() >= 1024 || (force && h.length())) {
+    serviceRadio();
     server.sendContent(h);
     h = "";
+    serviceRadio();
   }
 }
 
@@ -1250,9 +1532,14 @@ static void handleRoot() {
 #endif
          "</h1>");
 
-  bool armed = sysState == SysState::Armed;
-  h += "<p><span class='st " + String(armed ? "armed" : "dis") + "'>" + stateName(sysState) +
-       "</span> for " + fmtDur(now - stateSinceMs);
+  bool armed = sysState == SysState::Armed && presenceKnown && !carHome && !arrivalLatched &&
+               !radioLossPending && !(ses.active && ses.incomplete);
+#if PULSE_ENABLED
+  armed = armed && runMode == RunMode::Live && pulseTimerReady && !pulseActive && !pulseCompleted;
+#endif
+  h += "<p><span class='st " + String(armed ? "armed" : "dis") + "'>" + readinessName() +
+       "</span></p><p>Listening state: " + stateName(sysState) +
+       " for " + fmtDur(now - stateSinceMs);
 #if PULSE_ENABLED
   h += " &nbsp; mode <span class='st " +
        String(runMode == RunMode::Live ? "live" : (runMode == RunMode::DryRun ? "dry" : "dis")) +
@@ -1292,9 +1579,14 @@ static void handleRoot() {
   h += String("reed on GPIO ") + PIN_REED + ": door " +
        (digitalRead(PIN_REED) == LOW ? "CLOSED" : "NOT closed");
 #else
-  h += "not fitted (v1 — reed interlock is the v2 upgrade)";
+  h += "door movement unobserved; software reports commands, not opening confirmation";
 #endif
   h += "</td></tr>";
+  h += "<tr><td>last GPIO hold</td><td>" +
+       (lastPulseDurationUs ? String(lastPulseDurationUs) + " us (timer release)" : String("not measured this boot")) +
+       "</td></tr>";
+  h += "<tr><td>timer self-check</td><td>" + String((uint32_t)timerSelfCheckUs) +
+       " us / 250000 requested; output was held LOW</td></tr>";
 #endif
   h += "<tr><td>relaxed rule would have fired</td><td>" + String(relaxedCount) + "</td></tr>";
   h += "<tr><td>wake-in-place refusals</td><td>" + String(refusalCount) + "</td></tr>";
@@ -1307,6 +1599,19 @@ static void handleRoot() {
     if (lastSightName[0]) h += String(" ('") + lastSightName + "')";
   }
   h += "</td></tr>";
+  h += "<tr><td>radio processing</td><td>max delay " + String(radioMaxDelayMs) +
+       "ms; stale events " + String(radioStaleEvents) + "; queue drops " +
+       String((unsigned)btQueueDrops.load()) + "; high-water " + String(btQueueHighWater) + "</td></tr>";
+  h += "<tr><td>deferred log drops</td><td>" + String(deferredLogDrops) + "</td></tr>";
+#if UCONNECT_AUX
+  h += "<tr><td>Uconnect parked hint</td><td>";
+  if (!uconnectConfigured) h += "not configured";
+  else if (uconnectScanFault) h += "checks suspended after radio error; BLE continues";
+  else if (uconnectScanActive) h += "short check in progress";
+  else if (uconnectLastSeenMs) h += fmtDur(now - uconnectLastSeenMs) + " ago, rssi " + String(uconnectLastRssi);
+  else h += "not observed (absence means unknown)";
+  h += "; checks=" + String(uconnectChecks) + "</td></tr>";
+#endif
   h += "<tr><td>sightings (this boot)</td><td>" + String(totalSightings);
   if (uint32_t noR = carNoRssiReports.load())
     h += " (+" + String((unsigned)noR) + " " TARGET_KIND " reports w/o RSSI, ignored)";
@@ -1401,7 +1706,21 @@ static void handleLogFile(const char *path) {
     server.send(404, "text/plain", "no such log yet");
     return;
   }
-  server.streamFile(f, "text/plain");
+  // Bound each write so downloading retained logs does not monopolize the
+  // processing task while the car approaches. Snapshot the length before any
+  // serviceRadio() call can append new events to this same log.
+  size_t remaining = f.size();
+  server.setContentLength(remaining);
+  server.send(200, "text/plain", "");
+  char buffer[1024];
+  while (remaining && server.client().connected()) {
+    serviceRadio();
+    const size_t n = f.readBytes(buffer, remaining < sizeof(buffer) ? remaining : sizeof(buffer));
+    if (!n) break;
+    server.sendContent(buffer, n);
+    remaining -= n;
+  }
+  serviceRadio();
   f.close();
 }
 
@@ -1674,7 +1993,6 @@ static void wifiTick() {
 // ------------------------------------------------------------------ setup
 
 static uint32_t lastHeartbeatMs = 0, lastTickMs = 0;
-static uint32_t hbSightings = 0, hbCycles = 0, hbOther = 0;
 
 // The Arduino SDK ships with core-dump-to-flash enabled and min_spiffs.csv
 // already carries a 64 KB coredump partition, so every panic since day one has
@@ -1774,6 +2092,10 @@ void setup() {
 #endif
 
   if (!LittleFS.begin(true)) Serial.println("LittleFS mount failed!");
+#if PULSE_ENABLED
+  if (!initPulseTimer(pulseTimeout))
+    logEvent("ERR", "pulse timer initialization failed; commands remain blocked");
+#endif
 
   logEvent("BOOT", String("bluedoor ") + FW_VERSION + " (" + FW_ROLE + ") built " + __DATE__ +
                        " " + __TIME__ + ", reset: " + resetReasonStr() + ", boot #" +
@@ -1783,6 +2105,13 @@ void setup() {
   esp_reset_reason_t bootRR = esp_reset_reason();
   bool crashBoot = bootRR == ESP_RST_PANIC || bootRR == ESP_RST_INT_WDT ||
                    bootRR == ESP_RST_TASK_WDT || bootRR == ESP_RST_WDT;
+#if UCONNECT_AUX
+  if (crashBoot && uconnectFlightMagic == BC_MAGIC) {
+    uconnectScanFault = true;
+    logEvent("UCONNECT", "previous boot crashed during a Classic check; checks suspended, BLE continues");
+  }
+  uconnectFlightMagic = 0;
+#endif
   if (crashBoot && bcMagic == BC_MAGIC)
     logEvent("ERR", "crash forensics: last loop checkpoint '" +
                         String(bcStep < BC_COUNT ? BC_NAMES[bcStep] : "?") + "' at uptime " +
@@ -1822,17 +2151,21 @@ void setup() {
     logEvent("ERR", "config.h has the placeholder " TARGET_KIND " MAC — fill it in "
                     "(see config.example.h)");
   }
+#if UCONNECT_AUX
+  uconnectConfigured = parseMac(CAR_BT_MAC, uconnectAddr) &&
+                       strcasecmp(CAR_BT_MAC, "AA:BB:CC:DD:EE:FF") != 0;
+#endif
   if (strcmp(WIFI_SSID, "your-wifi-ssid") == 0)
     logEvent("ERR", "config.h has placeholder WiFi credentials — web page will not come up");
   if (!otaPasswordUsable())
     logEvent("ERR", "OTA_PASSWORD blank or placeholder in config.h — OTA stays disabled, "
                     "reflash over USB only");
 
-  btQueue = xQueueCreate(32, sizeof(BtEv));
+  btQueue = xQueueCreate(RADIO_QUEUE_SIZE, sizeof(BtEv));
   stateSinceMs = lastEvidenceMs = lastInqDoneMs = lastProbeMs = millis();
   wifiPhaseSinceMs = lastRadioStatsMs = millis();
 
-  if (initBt()) {
+  if (btQueue && initBt()) {
 #if DETECT_BLE
     logEvent("BT", String("BLE scan up, watching beacon ") +
                        (carMacIsPlaceholder ? "(placeholder MAC — survey only)" : TARGET_MAC) +
@@ -1863,6 +2196,26 @@ void setup() {
   WiFi.setAutoReconnect(true);
   WiFi.begin(WIFI_SSID, WIFI_PASS);
 
+#if PULSE_ENABLED
+  // Exercise the real ISR while the main task sleeps and radios start up.
+  // This tests timer independence without commanding the remote.
+  if (pulseTimerReady && preparePulseTimer(250)) {
+    timerSelfCheckStartUs = pulseMicros();
+    timerSelfCheckPending = true;
+    if (startPulseTimer()) delay(350);
+    if (timerSelfCheckPending || timerSelfCheckUs < 240000 || timerSelfCheckUs > 260000) {
+      timerSelfCheckPending = false;
+      pulseTimerReady = false;
+      logEvent("ERR", "timer self-check failed; automatic and manual pulses blocked");
+    } else {
+      logEvent("PULSE", String("timer self-check passed: ") + (uint32_t)timerSelfCheckUs +
+               "us for 250000us; output held LOW, no remote command");
+    }
+  } else {
+    pulseTimerReady = false;
+  }
+#endif
+
   server.on("/", HTTP_GET, []() { httpReqCount++; handleRoot(); });
   server.on("/mark", HTTP_POST, []() { httpReqCount++; handleMark(); });
   server.on("/presence", HTTP_POST, []() { httpReqCount++; handlePresence(); });
@@ -1883,33 +2236,18 @@ void setup() {
 }
 
 void loop() {
-  BtEv ev;
-  crumb(1);
-  while (xQueueReceive(btQueue, &ev, 0) == pdTRUE) {
-    switch (ev.kind) {
-      case BtEvKind::Sighting:
-        hbSightings++;
-        onCarSighting(ev.rssi, ev.name);
-        break;
-      case BtEvKind::InquiryDone:
-        hbCycles++;
-        onInquiryDone();
-        break;
-      case BtEvKind::ProbeResult:
-        onProbeResult(ev.ok, ev.name);
-        if (scanMode == ScanMode::Probe) startInquiry();
-        break;
-    }
-  }
+  serviceRadio();
 
   uint32_t now = millis();
 #if PULSE_ENABLED
   pulseTick();
 #endif
+  flushDeferredLogs();
+  persistCountersTick();
   if (now - lastTickMs >= 500) {
     lastTickMs = now;
     crumb(2);
-    machineTick();
+    if (uxQueueMessagesWaiting(btQueue) == 0) machineTick();
     crumb(3);
     scanTick();
     crumb(4);

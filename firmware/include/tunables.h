@@ -60,15 +60,43 @@
 // Weak upper-property activity does not establish garage occupancy. A command
 // sets a separate duplicate latch, and location stays UNKNOWN until a parked
 // tail is observed. Only a separate credible departure clears that latch.
-// Equal/short head-tail traces are ambiguous, not automatic departures.
+// Time-bucket medians establish a passage; sparse fading reception and quiet
+// confirm departure. Equal/short head-tail traces remain ambiguous.
 // Boot is UNKNOWN and blocks automatic pulses until movement establishes state.
 #define PRESENCE_QUIET_MS      (60u * 1000u)
-#define PRESENCE_TRANSIT_DBM   (-75)
 #define PRESENCE_PARKED_MIN_MS (15u * 1000u)
 #define PRESENCE_DEPARTURE_HEAD_MS (15u * 1000u)
-#define PRESENCE_DEPARTURE_TAIL_MS (15u * 1000u)
 #define PRESENCE_DIRECTION_MARGIN_MS (10u * 1000u)
 #define PRESENCE_FADED_DBM     (-85)
+#define JOURNEY_NEAR_GAP_MS    3000u
+#define JOURNEY_NEAR_PACKETS   4u
+// A departure passage is corroborated by direction/fade/quiet. Its bucket
+// median may be slightly below the opening gate (recorded departure: -81).
+#define JOURNEY_PASS_DBM       (-82)
+#define JOURNEY_FADE_MIN_MS    2000u
+#define JOURNEY_FADE_MAX_PPS   2u
+#define JOURNEY_FADE_GAP_MS    2500u
+#define JOURNEY_ENDING_WINDOW_MS 10000u
+#define JOURNEY_FAST_FADE_MS   10000u
+#define JOURNEY_FADE_DROP_DB   10
+
+// Reception timestamps survive the callback queue. Old evidence can update
+// location but must never issue a delayed opening command.
+#define RADIO_MAX_ACTUATION_AGE_MS 2000u
+#define RADIO_EVENTS_PER_LOOP  8u
+#define RADIO_QUEUE_SIZE       64u
+
+// Optional corroboration from the existing Classic-BT head unit. A single
+// 1.28s inquiry during a weak, stationary beacon session, at most once/10min.
+// No response is UNKNOWN, never departure. BLE remains the arrival signal.
+#ifndef UCONNECT_HINT_ENABLED
+#define UCONNECT_HINT_ENABLED  1
+#endif
+#define UCONNECT_SETTLE_MS     15000u
+#define UCONNECT_INTERVAL_MS   (10u * 60u * 1000u)
+#define UCONNECT_SCAN_UNITS    1
+#define UCONNECT_TIMEOUT_MS    4000u
+#define UCONNECT_NEAR_DBM      (-80)
 
 // ---- classic BT scanning ----
 // Inquiry length in 1.28 s units (4 = 5.12 s per cycle, restarted continuously)

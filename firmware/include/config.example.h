@@ -6,7 +6,8 @@
 #define WIFI_SSID       "your-wifi-ssid"
 #define WIFI_PASS       "your-wifi-password"
 
-// The car head unit's classic BT MAC ("Uconnect"), from Phase 0.
+// The car head unit's classic BT MAC ("Uconnect"), from Phase 0. BLE scanner
+// builds also use it for optional bounded parked-activity corroboration.
 #define CAR_BT_MAC      "AA:BB:CC:DD:EE:FF"
 // logger-ble builds watch this instead: the BLE beacon carried in the car.
 // Not needed for range tests — BLE_SURVEY in tunables.h logs every advertiser

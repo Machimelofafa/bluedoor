@@ -72,7 +72,7 @@ Controls, each requiring `CONTROL_TOKEN`:
 - **Mode**: `DISABLED` / `DRY-RUN` / `LIVE`, persisted. A reboot never
   escalates the mode. First boot is DRY-RUN.
 - **Presence**: diagnostic override to IN GARAGE or OUTSIDE GARAGE. Boot
-  location is UNKNOWN; normal operation resolves it from observed movement.
+location is UNKNOWN; normal operation resolves it from observed movement.
 - **Manual pulse** (v1 builds): a single press for commissioning, refused in
   DISABLED. The optional hold field (50 to 20000 ms) is a bench aid: a 3 s hold
   lets you meter the pin, the optocoupler LED and the remote pads stage by
@@ -95,16 +95,39 @@ Controls, each requiring `CONTROL_TOKEN`:
   does not establish direction by itself.
 - **Duplicate-command latch**: accepting an approach blocks repeats immediately
   in every run mode, but sets location UNKNOWN rather than claiming garage
-  occupancy. After 60 seconds of silence ends the session, a post-peak tail
-  of at least 15 seconds, longer than the head and ending below the approach
-  threshold, infers GARAGE. An ambiguous accepted session keeps UNKNOWN and
+  occupancy. After 60 seconds of silence ends the session, a post-passage tail
+  of at least 15 seconds, longer than the head, with several weak time buckets
+  and an ending median below the approach threshold, infers GARAGE.
+  An ambiguous accepted session keeps UNKNOWN and
   its latch. The accepted session can never classify itself as a departure.
-- **Separate departure**: an unaccepted session needs a peak of at least −75,
-  at least 15 seconds before the peak, a head at least 10 seconds longer than
-  the tail, a tail at most 15 seconds, and an ending median at or below −85.
-  After 60 seconds of silence it can infer OUTSIDE GARAGE and clear the latch.
-  A sufficiently long post-peak tail instead infers GARAGE; other strong
-  traces are ambiguous. These are route heuristics, not measured door state.
+- **Separate departure**: one-second bucket medians establish a sustained
+  passage at −82 dBm or stronger, supported by at least four packets across
+  500 ms. A lone strong packet cannot move that landmark. An unaccepted session
+  needs at least 15 seconds before the passage ends, a head at least 10 seconds
+  longer than the tail, and at least two weak ending buckets (median ≤−85).
+  Either a quick fade of at least 10 dB within 10 seconds, or a longer thinning
+  tail can complete the signature. The longer path requires at most two packets
+  per second, a density reduction of at least one third, and a reception gap
+  of at least 2.5 seconds within the last 10 seconds of reception. After 60
+  seconds of silence it infers OUTSIDE GARAGE, clears the latch, and permits
+  two-minute re-arm. The former absolute 15-second tail veto is removed.
+  Ambiguous sessions preserve state. These remain calibrated route heuristics.
+- **Uconnect corroboration**: with `CAR_BT_MAC` configured, BLE builds can run
+  one 1.28-second Classic inquiry per stationary session, at most once per ten
+  minutes. Checks wait for 15 seconds of weak beacon activity, or a parked
+  tail following an accepted arrival. No checks start during a known outside
+  approach. A response at −80 dBm or stronger corroborates parked activity;
+  combined with a stationary, unbroken beacon session, it can resolve boot
+  UNKNOWN to inferred GARAGE. It never asserts OUTSIDE, clears a duplicate
+  latch, or triggers an opening. No response means UNKNOWN, not departure.
+  A timeout or a crash during a check suspends further checks for that boot.
+- **Reception integrity**: packets carry the timestamp taken at callback
+  entry through a 64-event queue. The task drains bounded batches and also
+  services radio events between HTTP chunks. The UI reports maximum processing
+  delay, stale events, queue high-water and losses. Evidence older than two
+  seconds cannot trigger an opening; a queue loss prevents opening/departure
+  conclusions for the affected session. A subsequent intact session recovers
+  normally. Session shape uses reception time, even after processing delays.
 - **Opening eligibility**: only OUTSIDE GARAGE with a clear duplicate latch
   can open. Weak activity in upper parking neither issues a command nor
   consumes a subsequent approach down the ramp. GARAGE and UNKNOWN block
@@ -132,10 +155,16 @@ Controls, each requiring `CONTROL_TOKEN`:
 
 - GPIO 26 is a non-strapping pin, driven LOW first thing in `setup()`. The
   10 kΩ hardware pulldown covers the boot-ROM window before that.
-- Every pulse logs a **pad read-back** (the pin's actual level) and a **load
-  check**: the pin floats briefly on its weak pull-up and the optocoupler LED
-  path must drag it LOW. `NOTHING connected` in the log means a loose jumper
-  or an open joint.
+- An independent hardware timer releases the GPIO. The interrupt and its GPIO
+  access run from IRAM; they do not allocate or log. Flash logs and counter
+  persistence are deferred during a pulse. Concurrent commands are refused.
+- Every pulse logs **pad read-back**, requested duration and measured elapsed
+  GPIO hold time. The former weak-pullup load test is removed: the mandatory
+  10 kΩ pulldown could satisfy it even without the optocoupler LED branch.
+  GPIO read-back still does not establish remote transmission or door movement.
+- At boot, a 250 ms timer-only self-check runs while the task sleeps and radios
+  start. It keeps the output LOW and does not increment the pulse counter.
+  Initialization or self-check failure blocks pulses.
 - `WEB_CONTROLS_NEED_TOKEN 0` in tunables drops the token requirement for
   bench work. The page shows a red banner while it is off. Put it back before
   the device goes anywhere near the door.
@@ -154,7 +183,9 @@ Controls, each requiring `CONTROL_TOKEN`:
 | `SIGNAL` | All states: one-second buckets with uptime start, sample span, count, first/last/min/max RSSI and exact bucket median. Replaces armed per-packet flash logging. |
 | `RELAXED` | The no-ramp comparison rule would have fired here. Never actuates. |
 | `REFUSE` | Wake-in-place signature; the encounter is latched non-fireable. |
-| `PULSE` | Actual, suppressed, refused or manual pulses, with the pad read-back and load check. |
+| `PULSE` | Commands, suppression, timer-only boot check, measured GPIO hold duration and pad levels; not door confirmation. |
+| `JOURNEY` | Sustained passage, head/tail milliseconds, packet counts, ending median, fade candidate and evidence completeness. |
+| `UCONNECT` | Bounded parked checks and positive corroboration; absence is never departure. |
 | `MODE` | Run-mode changes and the mode restored at boot. |
 | `ENC` | Encounter (sighting cluster while armed) started or ended, with RSSI stats and a `trend=` label: approaching / receding / steady. |
 | `SIGHT` | Beacon sightings, aggregated per minute while disarmed, each with first→last RSSI and a trend label. A `went quiet` line timestamps when sightings stopped. A rising trail while disarmed (`disarmed ramp`) is logged peak by peak, with the trigger crossing, so an arrival the machine could not act on keeps its timing. |
@@ -183,19 +214,31 @@ timing and the DISABLED/DRY-RUN/LIVE GPIO gates. Recorded fixtures have only
 second-resolution timing; millisecond gate boundaries use synthetic inputs.
 These checks do not validate radio reception or physical door movement.
 
+`recorded_journeys.h` preserves exact, de-identified SIGNAL bucket summaries
+for eight further retained sessions. Aggregate replays exercise the production
+journey classifier; they are not reconstructed packet replays of the approach
+gate. Tests cover the missed departure and subsequent eligibility, the earlier
+successful trip, parked activity, prolonged sparse fades versus dense parked
+tails, delayed delivery, queue loss and recovery, Uconnect isolation, actual
+readiness labels, overlap refusal, timer failure, and pulse release while the
+main task is stalled. The host timer is simulated; the on-device timer-only
+self-check validates the real interrupt without operating the door.
+
 ### Runtime
 
 - **BLE passive scanning, continuously**, restarted every
   `BLE_SCAN_RESTART_MS` as a liveness watchdog. The beacon's name rides in the
   advertising packet itself (non-connectable advertising cannot answer scan
   requests), so a passive scanner always sees it.
-- **The classic radio is left compiled in but unused** on the BLE targets:
+- **The classic radio supports bounded parked corroboration** on BLE targets:
   the Arduino core's prebuilt Bluetooth libraries reject a BLE-only
-  controller configuration, so the controller runs dual-mode with inquiry
-  simply never started. Continuous classic inquiry alongside WiFi is what
+  controller configuration, so the controller runs dual-mode. Continuous classic inquiry alongside WiFi is what
   crashed the controller (an assert in the prebuilt stack under coexistence,
   every one to three hours); with inquiry retired the same board ran a 25 h
-  soak clean with flat heap fragmentation.
+  soak clean with flat heap fragmentation. This version keeps continuous
+  inquiry disabled, adds only the bounded Uconnect checks described above,
+  and contains check timeouts/crashes. Their long-term coexistence behavior
+  still needs observation. `UCONNECT_HINT_ENABLED=0` disables them entirely.
 - **The beacon reads its TX power back** from the controller and prints
   that, rather than the value requested. The link budget rests on that one
   number and a silently clamped radio would otherwise look identical to a
